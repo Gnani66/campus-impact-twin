@@ -1,20 +1,159 @@
-# Campus Impact Twin
+# Smart Campus Digital Twin
 
-Evidence-grounded sustainability decision platform for campus operations.
+A 3D digital twin of the campus, backed by real building,
+floor, zone, equipment and sensor data.
+
+```
+Campus
+  │
+  └── Building
+        │
+        └── Floor
+              │
+              └── Zone / Room
+                    │
+          ┌─────────┼─────────┐
+          │         │         │
+       Sensors   Equipment  Assets
+          │         │
+          └────┬────┘
+               │
+               ▼
+          Telemetry
+               │
+               ▼
+           Analytics
+               │
+               ▼
+           Incidents
+               │
+               ▼
+        Recommendations
+```
 
 ## Architecture
 
-The project is intentionally separated into three primary layers:
+- `frontend/` — Next.js, React, TypeScript, Tailwind CSS, React Three Fiber.
+- `backend/` — FastAPI, Python, Supabase.
 
-- `frontend/` — Next.js, React, TypeScript, Tailwind CSS, React Three Fiber and browser computer vision.
-- `backend/` — FastAPI, Python, evidence processing, deterministic calculations, optimization and AI orchestration.
-- `database/` — Supabase/PostgreSQL migrations and seed data.
+The frontend never talks to the database directly. It calls
+the FastAPI backend, which reads Supabase with the service
+role key.
 
-## Local Development
+## Database
+
+Migrations live in `backend/migrations/` and run in order in
+the Supabase SQL editor.
+
+| File | Purpose |
+| --- | --- |
+| `001_smart_campus.sql` | Creates the schema, drops the superseded schema |
+| `002_seed_smart_campus.sql` | Seeds CIT-MAIN and the LH01 entity graph |
+| `LEGACY_snapshot_do_not_run.sql` | Reference only. Pre-migration data snapshot |
+
+Tables: `campuses`, `buildings`, `floors`, `zones`,
+`equipment`, `sensors`, `telemetry_readings`, `incidents`.
+
+Seeded hierarchy:
+
+```
+CIT-MAIN   Cambridge Institute of Technology
+└── ACADEMIC-BLK-A   Academic Block A
+    └── A-F1   Ground Floor
+        └── LH01   University Lecture Hall
+            ├── HVAC-LH01
+            ├── OCC-LH01
+            ├── TEMP-LH01
+            ├── HUM-LH01
+            ├── CO2-LH01
+            └── ENERGY-LH01
+```
+
+## Local development
+
+### Backend
+
+```bash
+cd backend
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env
+# set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+
+uvicorn app.main:app --reload --port 8000
+```
+
+> The virtualenv here is Python 3.9, so the schemas use
+> `typing.Optional` / `typing.List` rather than `X | None`.
+
+Endpoints:
+
+| Method | Path |
+| --- | --- |
+| GET | `/` |
+| GET | `/health` |
+| GET | `/api/v1/campus/{campus_code}/twin` |
+| GET | `/docs` |
+
+```bash
+curl http://localhost:8000/
+curl http://localhost:8000/health
+curl http://localhost:8000/api/v1/campus/CIT-MAIN/twin
+```
 
 ### Frontend
 
 ```bash
 cd frontend
+
 npm install
+
+cp .env.example .env.local
+# NEXT_PUBLIC_API_URL=http://localhost:8000
+
 npm run dev
+```
+
+- http://localhost:3000 — overview
+- http://localhost:3000/twin — 3D digital twin with live markers
+- http://localhost:3000/dashboard — campus command centre
+
+## The twin identity
+
+`lecture-hall.glb` resolves to a real zone through the
+database, not through hardcoded coordinates:
+
+```
+lecture-hall.glb
+      │
+      ▼
+LH01  University Lecture Hall   (zone_type: lecture_hall, capacity 60)
+      │
+      ├── HVAC-LH01            (equipment, 12.5 kW rated)
+      ├── OCC-LH01             (occupancy, every 5s)
+      ├── TEMP-LH01            (temperature, every 5s)
+      ├── HUM-LH01             (humidity, every 5s)
+      ├── CO2-LH01             (co2, every 5s)
+      └── ENERGY-LH01          (energy, every 5s)
+```
+
+Marker positions are derived from the model's real bounding
+box at runtime, so they stay correct if the asset changes.
+
+## Notes
+
+`public/models/lecture-hall.glb` is a 260 MB asset and takes
+roughly 10-20 seconds to load on first paint. A loading
+overlay shows progress while the Suspense boundary resolves.
+Compressing or decimating the asset is the highest-impact
+performance improvement available.
+
+## Next phase
+
+Phase 5 — Live Campus Telemetry Engine: sensor simulator,
+MQTT broker, FastAPI subscriber, WebSocket streaming into the
+twin, with physically coupled signals rather than random
+noise.
