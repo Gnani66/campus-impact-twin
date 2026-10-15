@@ -24,8 +24,14 @@ Nothing here runs at import time.
 """
 
 import asyncio
+import inspect
 import logging
-from typing import Callable, Optional
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Optional,
+)
 
 from app.core.config import settings
 from app.telemetry.mqtt_worker import MqttTelemetryWorker
@@ -48,6 +54,7 @@ class TelemetryRuntime:
         writer_factory: Optional[Callable] = None,
         worker_factory: Optional[Callable] = None,
         registry_loader: Optional[Callable] = None,
+        observer: Optional[Callable] = None,
         client_factory: Optional[Callable] = None,
     ) -> None:
         self._settings = (
@@ -59,6 +66,11 @@ class TelemetryRuntime:
         )
         self._registry_loader = registry_loader or get_registry
         self._client_factory = client_factory
+
+        # Called with each batch of rows once they are durable.
+        # Wired to the intelligence engine by the application, so
+        # the telemetry package does not import it directly.
+        self._observer = observer
 
         self._writer = None
         self._worker = None
@@ -118,6 +130,48 @@ class TelemetryRuntime:
 
     # --- startup --------------------------------------------------
 
+    def _build_writer(self):
+        """
+        Builds the writer, attaching the intelligence engine when
+        both are enabled and the factory supports it.
+
+        The observer is passed as a keyword argument only if the
+        factory can accept it, so existing injected factories with
+        narrower signatures keep working.
+        """
+
+        kwargs: Dict[str, Any] = {
+            "app_settings": self._settings
+        }
+
+        if (
+            self._observer is not None
+            and self._accepts_observer(self._writer_factory)
+        ):
+            kwargs["on_persisted"] = self._observer
+
+        return self._writer_factory(**kwargs)
+
+    @staticmethod
+    def _accepts_observer(factory) -> bool:
+        """
+        Whether `factory` accepts an `on_persisted` keyword.
+        """
+
+        try:
+            parameters = inspect.signature(factory).parameters
+        except (TypeError, ValueError):
+            return False
+
+        if any(
+            parameter.kind
+            is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        ):
+            return True
+
+        return "on_persisted" in parameters
+
     async def start(self) -> None:
         """
         Brings the pipeline up.
@@ -145,9 +199,7 @@ class TelemetryRuntime:
         self._flush_stop = asyncio.Event()
 
         try:
-            self._writer = self._writer_factory(
-                app_settings=self._settings
-            )
+            self._writer = self._build_writer()
 
             self._worker = self._worker_factory(
                 writer=self._writer,

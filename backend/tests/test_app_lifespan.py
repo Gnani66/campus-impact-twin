@@ -32,6 +32,8 @@ BASELINE_ROUTES = [
     "/",
     "/api/v1/campus/{campus_code}/telemetry/latest",
     "/api/v1/campus/{campus_code}/twin",
+    "/api/v1/incidents",
+    "/api/v1/incidents/summary",
     "/docs",
     "/docs/oauth2-redirect",
     "/health",

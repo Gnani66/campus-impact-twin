@@ -1,3 +1,4 @@
+import inspect
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -6,11 +7,65 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.campus import router as campus_router
+from app.api.incidents import router as incidents_router
 from app.core.config import settings
+from app.services.intelligence_service import (
+    intelligence_service,
+)
 from app.telemetry.lifecycle import TelemetryRuntime
 
 
 logger = logging.getLogger(__name__)
+
+
+def _intelligence_observer():
+    """
+    The intelligence engine, called with each batch of telemetry
+    once it is durable.
+
+    Returning the bound method rather than the service keeps the
+    telemetry package from importing the intelligence package.
+    """
+
+    if not settings.intelligence_enabled:
+        return None
+
+    return intelligence_service.process_batch
+
+
+def _accepts_observer(factory) -> bool:
+    """
+    Whether `factory` accepts an `observer` keyword.
+
+    Injected runtime factories in the test suite have narrower
+    signatures than the real one, so the observer is only passed
+    when the factory can actually take it.
+    """
+
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        return False
+
+    if any(
+        parameter.kind
+        is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return True
+
+    return "observer" in parameters
+
+
+def _build_runtime(runtime_factory):
+    observer = _intelligence_observer()
+
+    if observer is not None and _accepts_observer(
+        runtime_factory
+    ):
+        return runtime_factory(observer=observer)
+
+    return runtime_factory()
 
 
 def create_lifespan(
@@ -31,7 +86,7 @@ def create_lifespan(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        runtime = runtime_factory()
+        runtime = _build_runtime(runtime_factory)
 
         app.state.telemetry = runtime
 
@@ -73,6 +128,7 @@ app.add_middleware(
 )
 
 app.include_router(campus_router)
+app.include_router(incidents_router)
 
 
 @app.get("/")
@@ -96,4 +152,5 @@ def health() -> dict:
         "timestamp": datetime.now(
             timezone.utc
         ).isoformat(),
+        "intelligence": intelligence_service.stats,
     }

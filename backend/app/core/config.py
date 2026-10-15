@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     telemetry_tick_seconds: int = 5
     telemetry_flush_seconds: int = 10
 
+    # Campus used by the intelligence endpoints when the caller
+    # does not name one.
+    default_campus_code: str = "CIT-MAIN"
+
+    # The intelligence engine runs after telemetry is persisted.
+    # It is off by default so the API starts unchanged.
+    intelligence_enabled: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

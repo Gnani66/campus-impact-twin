@@ -30,6 +30,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from typing import (
+    Any,
     Callable,
     Dict,
     List,
@@ -111,6 +112,9 @@ class TelemetryWriter:
         sleep_fn: Callable[[float], None] = None,
         flush_interval_seconds: Optional[float] = None,
         app_settings: object = None,
+        on_persisted: Optional[
+            Callable[[List[Dict[str, Any]]], None]
+        ] = None,
     ) -> None:
         from app.core.config import settings
 
@@ -130,6 +134,7 @@ class TelemetryWriter:
             )
 
         self._insert_fn = insert_fn
+        self._on_persisted = on_persisted
         self._client = client
         self._chunk_size = chunk_size
         self._max_buffer_rows = max_buffer_rows
@@ -264,6 +269,9 @@ class TelemetryWriter:
             self.stats.inserted_rows += inserted
             self.stats.flushes += 1
 
+            if self._on_persisted is not None:
+                self._notify_persisted(batch)
+
             logger.info(
                 "Telemetry flush inserted %d rows in %d "
                 "chunk(s)",
@@ -358,6 +366,28 @@ class TelemetryWriter:
             raise
 
     # --- internals -----------------------------------------------
+
+    def _notify_persisted(
+        self,
+        batch: List[Dict[str, Any]],
+    ) -> None:
+        """
+        Hands the persisted rows to the observer, if any.
+
+        The intelligence engine is wired in here so it only sees
+        rows that are already durable. An observer failure is
+        logged and swallowed: telemetry is the system of record,
+        and losing it because incident detection had a bad day
+        would be the wrong trade.
+        """
+
+        try:
+            self._on_persisted(batch)
+        except Exception:
+            logger.exception(
+                "Telemetry observer failed for %d rows",
+                len(batch),
+            )
 
     def _chunk_size_count(self, rows: List[Dict]) -> int:
         if not rows:
