@@ -1,0 +1,63 @@
+# =========================================================
+# CAMPUS IMPACT TWIN
+# =========================================================
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+frontend/.env.local
+
+# Testing
+coverage/
+playwright-report/
+test-results/
+
+# Build
+dist/
+build/
+
+# 3D assets (too large for GitHub — 260MB; obtain separately)
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.blend
+frontend/public/models/
+
+# Stray files
+/database/h
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Vercel
+.vercel/
+
+# Supabase
+.supabase/
+
+# Logs
+*.log
