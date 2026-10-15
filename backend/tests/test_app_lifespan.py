@@ -26,12 +26,16 @@ from app.telemetry.writer import TelemetryWriter
 SENSOR_ID = "d1acf785-0000-4000-8000-00000000000a"
 ZONE_ID = "26f134ea-0000-4000-8000-000000000004"
 
-# Phase 5C Part 3 added the read-only telemetry route; every
-# other route must be exactly as it was.
+# Phase 5C Part 3 added the read-only telemetry route. Phase 8
+# added the two correlation routes. Every other route must be
+# exactly as it was, which is what makes this list useful: an
+# accidental addition or removal fails the test.
 BASELINE_ROUTES = [
     "/",
     "/api/v1/campus/{campus_code}/telemetry/latest",
     "/api/v1/campus/{campus_code}/twin",
+    "/api/v1/correlation/analyze",
+    "/api/v1/correlation/zone/{zone_code}",
     "/api/v1/incidents",
     "/api/v1/incidents/summary",
     "/api/v1/vision/analyze",
@@ -43,6 +47,23 @@ BASELINE_ROUTES = [
     "/openapi.json",
     "/redoc",
 ]
+
+
+def test_correlation_routes_are_not_gated_by_vision():
+    """
+    The correlation engine judges zones from stored
+    observations, so it stays registered even when vision is
+    switched off. A zone whose last camera reading is weeks old
+    must still be judged and downgraded; hiding the endpoint
+    would make that silence indistinguishable from a fault.
+    """
+
+    from app.main import app as production
+
+    paths = {r.path for r in production.routes}
+
+    assert "/api/v1/correlation/analyze" in paths
+    assert "/api/v1/correlation/zone/{zone_code}" in paths
 
 
 @dataclass

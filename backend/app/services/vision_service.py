@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 TABLE = "vision_observations"
 
+# Phase 8's observation table. The correlation engine reads this
+# one; `TABLE` is retained for backward compatibility only.
+OBSERVATIONS_TABLE = "observations"
+
 # How many rows the latest-observation lookup will consider.
 # The query is ordered and sliced to one, so this only bounds
 # the scan PostgREST performs.
@@ -295,7 +299,90 @@ class VisionService:
                 "The vision observation was not stored"
             )
 
+        # Phase 8 reads `observations`, not `vision_observations`.
+        # The legacy table is kept so existing dashboards keep
+        # working, but it is no longer the source of truth: two
+        # tables holding the same fact would let the correlation
+        # engine judge a zone against a reading the audit trail
+        # does not know about.
+        #
+        # This write is best effort. The primary store already
+        # confirmed the observation, so failing the request here
+        # would discard a stored result over a compatibility
+        # copy.
+        self._mirror_to_observations(
+            observation, inserted[0]
+        )
+
         return inserted[0]
+
+    def _mirror_to_observations(
+        self,
+        observation: VisionObservation,
+        stored: dict,
+    ) -> Optional[str]:
+        """
+        Copies a stored observation into the Phase 8 table.
+
+        Stores derived metadata only: the count, the confidence,
+        the bounding boxes and the model name. No image and no
+        video is retained, because an observation is a
+        measurement and the footage behind it is the part that
+        would make this a store of people's movements rather
+        than of a room's occupancy.
+        """
+
+        row = {
+            "zone_code": observation.zone_code,
+            "source_type": "camera",
+            "observation_type": "occupancy",
+            "value": observation.value,
+            "unit": observation.unit,
+            "confidence": observation.confidence,
+            "evidence_status": "usable",
+            "evidence": {
+                "detections": observation.evidence,
+                "model": stored.get("model_name")
+                or "YOLO11n",
+                "camera_id": observation.camera_id,
+                "legacy_table": TABLE,
+                "legacy_row_id": stored.get("id"),
+            },
+            "observed_at": (
+                observation.observed_at.isoformat()
+            ),
+        }
+
+        try:
+            inserted = (
+                get_supabase()
+                .table(OBSERVATIONS_TABLE)
+                .insert(row)
+                .execute()
+                .data
+            )
+        except Exception:
+            logger.exception(
+                "The observation was stored in %s but not "
+                "mirrored into %s; the correlation engine will "
+                "not see it (zone=%s)",
+                TABLE,
+                OBSERVATIONS_TABLE,
+                observation.zone_code,
+            )
+
+            return None
+
+        if not inserted:
+            logger.error(
+                "Mirroring into %s returned no rows (zone=%s)",
+                OBSERVATIONS_TABLE,
+                observation.zone_code,
+            )
+
+            return None
+
+        return inserted[0].get("id")
 
     def _find_existing(
         self,

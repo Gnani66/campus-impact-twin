@@ -265,7 +265,13 @@ def test_successful_persistence(store, service):
     assert response.confidence == pytest.approx(0.8)
     assert len(response.detections) == 2
 
-    assert len(store.inserts) == 1
+    # Two writes: the Phase 7 table, and the Phase 8 `observations`
+    # table the correlation engine reads.
+    assert len(store.inserts) == 2
+
+    table, _ = store.inserts[0]
+
+    assert table == "vision_observations"
 
     _, row = store.inserts[0]
 
@@ -947,7 +953,10 @@ def test_distinct_timestamps_are_distinct_observations(
         ),
     )
 
-    assert len(store.inserts) == 2
+    # Two analyses, two writes each: one to the Phase 7 table
+    # and one to the Phase 8 `observations` table. Neither
+    # analysis was deduplicated, which is the point of the test.
+    assert len(store.inserts) == 4
 
 
 def test_server_generated_time_always_writes(
@@ -965,7 +974,7 @@ def test_server_generated_time_always_writes(
     )
 
     assert "vision_observations" in store.queries
-    assert len(store.inserts) == 1
+    assert len(store.inserts) == 2
 
 
 def test_duplicate_lookup_failure_still_writes(store, service):
@@ -1060,8 +1069,9 @@ def test_lifecycle_image_to_response(store):
     assert detector.calls
     assert detector.calls[0][0]
 
-    # 2. exactly one row was written
-    assert len(store.inserts) == 1
+    # 2. exactly one row per table: the Phase 7 table and the
+    #    Phase 8 `observations` table
+    assert len(store.inserts) == 2
     table, payload = store.inserts[0]
 
     # 3. the row matches the schema and the detector output
@@ -1148,3 +1158,152 @@ def test_zero_people_is_stored_as_a_real_observation(
     assert response.people_count == 0
     assert payload["value"] == 0
     assert payload["evidence"] == []
+
+
+# ============================================================
+# PHASE 8 MIRROR
+# ============================================================
+#
+# Phase 8 reads `observations`, not `vision_observations`. The
+# legacy table is kept for existing dashboards, but only the new
+# table feeds the correlation engine.
+
+
+def test_observation_is_mirrored_into_observations(
+    store, service
+):
+    """
+    The correlation engine reads `observations`, so a stored
+    observation that is not mirrored there is invisible to it.
+    """
+
+    service.analyze(
+        camera_id="cam-hall-7",
+        zone_code="LH01",
+        image_bytes=make_png(),
+    )
+
+    mirrored = [
+        (table, payload)
+        for table, payload in store.inserts
+        if table == "observations"
+    ]
+
+    assert len(mirrored) == 1
+
+    _, payload = mirrored[0]
+
+    assert payload["zone_code"] == "LH01"
+    assert payload["source_type"] == "camera"
+    assert payload["observation_type"] == "occupancy"
+    assert payload["value"] == 2
+    assert payload["unit"] == "people"
+    assert payload["confidence"] == pytest.approx(0.8)
+    assert payload["evidence_status"] == "usable"
+    assert payload["observed_at"]
+
+
+def test_mirror_keeps_no_imagery(store, service):
+    """
+    An observation is a measurement. Retaining footage behind it
+    would make this a store of people's movements rather than of
+    a room's occupancy.
+    """
+
+    service.analyze(
+        camera_id="cam-hall-7",
+        zone_code="LH01",
+        image_bytes=make_png(),
+    )
+
+    _, payload = next(
+        (t, p)
+        for t, p in store.inserts
+        if t == "observations"
+    )
+
+    assert "detections" in payload["evidence"]
+    assert "model" in payload["evidence"]
+
+    # No raw image or video bytes anywhere in the row.
+    serialised = repr(payload)
+
+    assert "data:image" not in serialised
+    assert "base64" not in serialised
+
+
+def test_mirror_links_back_to_the_legacy_row(store, service):
+    """
+    The two tables hold the same fact, so each row records which
+    row it mirrors. Without that link a disagreement between them
+    would be undiagnosable.
+    """
+
+    service.analyze(
+        camera_id="cam-hall-7",
+        zone_code="LH01",
+        image_bytes=make_png(),
+    )
+
+    legacy = next(
+        p for t, p in store.inserts
+        if t == "vision_observations"
+    )
+    _, mirrored = next(
+        (t, p) for t, p in store.inserts
+        if t == "observations"
+    )
+
+    assert mirrored["evidence"]["legacy_table"] == (
+        "vision_observations"
+    )
+    assert mirrored["evidence"]["camera_id"] == (
+        legacy["camera_id"]
+    )
+
+
+def test_mirror_failure_does_not_lose_the_observation(
+    store, service
+):
+    """
+    The primary write already succeeded. Failing the request over
+    a compatibility copy would discard a stored result, so the
+    response still reports success and the failure is logged.
+    """
+
+    store.fail_next["observations"] = RuntimeError(
+        "connection refused"
+    )
+
+    response = service.analyze(
+        camera_id="cam-hall-7",
+        zone_code="LH01",
+        image_bytes=make_png(),
+    )
+
+    assert response.people_count == 2
+    assert any(
+        table == "vision_observations"
+        for table, _ in store.inserts
+    )
+
+
+def test_primary_failure_still_fails_the_request(
+    store, service
+):
+    """
+    The mirror is best effort; the primary store is not. A
+    response claiming an observation was stored when it was not
+    would be a lie the audit trail cannot correct.
+    """
+
+    store.fail_next["vision_observations"] = (
+        RuntimeError("connection refused")
+    )
+
+    with pytest.raises(VisionPersistenceError):
+        service.analyze(
+            camera_id="cam-hall-7",
+            zone_code="LH01",
+            image_bytes=make_png(),
+        )

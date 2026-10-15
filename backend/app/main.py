@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.campus import router as campus_router
+from app.api.correlation import router as correlation_router
 from app.api.incidents import router as incidents_router
 from app.core.config import settings
 from app.services.intelligence_service import (
@@ -185,6 +186,14 @@ app.add_middleware(
 
 app.include_router(campus_router)
 app.include_router(incidents_router)
+
+# The correlation engine reads stored observations, so it is
+# always registered. It is not gated behind VISION_ENABLED: a
+# zone whose last camera reading is weeks old is still a zone
+# the gate should judge and downgrade, and hiding the endpoint
+# would make that silence indistinguishable from a fault.
+app.include_router(correlation_router)
+
 VISION_ROUTES_ENABLED = include_vision_router(app)
 
 
