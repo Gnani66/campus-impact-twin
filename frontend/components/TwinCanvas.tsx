@@ -13,7 +13,11 @@ import {
 } from "react";
 import { Box3, Vector3 } from "three";
 
-import type { Equipment, Sensor } from "@/lib/types";
+import type {
+  Equipment,
+  LatestTelemetryReading,
+  Sensor,
+} from "@/lib/types";
 
 import {
   TWIN_CONFIG,
@@ -28,11 +32,20 @@ import SensorMarker from "./SensorMarker";
 interface TwinCanvasProps {
   sensors: Sensor[];
   equipment: Equipment[];
+  /**
+   * Latest stored readings keyed by sensor id. Changes on every
+   * refresh, so the scene keeps its geometry and only the
+   * marker labels update.
+   */
+  readings?: Record<string, LatestTelemetryReading>;
+  now: number | null;
 }
 
 export default function TwinCanvas({
   sensors,
   equipment,
+  readings,
+  now,
 }: TwinCanvasProps) {
   return (
     <div className="relative h-full w-full">
@@ -60,6 +73,8 @@ export default function TwinCanvas({
           <TwinScene
             sensors={sensors}
             equipment={equipment}
+            readings={readings}
+            now={now}
           />
         </Suspense>
       </Canvas>
@@ -79,11 +94,15 @@ export default function TwinCanvas({
 function TwinScene({
   sensors,
   equipment,
+  readings,
+  now,
 }: TwinCanvasProps) {
   const { scene } = useGLTF(
     TWIN_CONFIG.model.path,
   );
 
+  // Placement depends only on the model and the sensors, never
+  // on readings, so a telemetry refresh cannot move a marker.
   const layout = useMemo(
     () =>
       computeMarkerLayout(
@@ -113,6 +132,8 @@ function TwinScene({
           key={sensor.id}
           sensor={sensor}
           marker={layout.sensors[index]}
+          reading={readings?.[sensor.id]}
+          now={now}
         />
       ))}
 

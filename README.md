@@ -151,9 +151,51 @@ overlay shows progress while the Suspense boundary resolves.
 Compressing or decimating the asset is the highest-impact
 performance improvement available.
 
+## Telemetry
+
+The telemetry pipeline is storage-first. Readings are written
+to `telemetry_readings` and read back through the API; nothing
+streams to the browser.
+
+```
+simulator ──▶ Mosquitto (docker compose up -d)
+               └──▶ FastAPI worker ──▶ TelemetryWriter ──▶ telemetry_readings
+                                                              │
+                              GET /api/v1/campus/{code}/telemetry/latest
+                                                              │
+                                                   Next.js polls every 20s
+```
+
+| Step | Status |
+| --- | --- |
+| Simulator with coupled physics | Done. Produces demo values, not measurements |
+| MQTT broker, worker, batched writer | Done. All gated behind `MQTT_ENABLED`, default `false` |
+| Read-only latest endpoint | Done. One latest reading per sensor |
+| Dashboard and 3D twin display | Done. Polls every 20 seconds |
+
+Read carefully:
+
+* **Stored, not live.** The endpoint returns the newest
+  *stored* reading. With MQTT disabled the newest reading is
+  only as fresh as the last write, which the UI shows as an
+  age next to the reading timestamp. Polling every 20 seconds
+  proves the API is reachable, not that anything is ingesting.
+* **Simulated by default.** Every reading produced so far came
+  from the simulator and is labelled `source="simulator"` in
+  the UI. No physical sensor instrumentation is connected.
+* **No streaming.** WebSocket delivery was deferred; the
+  frontend polls instead.
+
+To produce new readings, enable MQTT for one process:
+
+```bash
+cd backend
+MQTT_ENABLED=true .venv/bin/python ../scripts/phase5c_e2e_verify.py
+```
+
 ## Next phase
 
-Phase 5 — Live Campus Telemetry Engine: sensor simulator,
-MQTT broker, FastAPI subscriber, WebSocket streaming into the
-twin, with physically coupled signals rather than random
-noise.
+Phase 6 — intelligence on top of stored telemetry: anomaly
+detection, forecasting and recommendations. None of it exists
+yet, and none of it can be validated until the pipeline
+produces a meaningful history of real sensor data.

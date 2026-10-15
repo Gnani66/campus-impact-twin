@@ -1,0 +1,53 @@
+# =========================================================
+# SMART CAMPUS DIGITAL TWIN — LOCAL DEVELOPMENT ONLY
+#
+# The only service here is the MQTT broker for Phase 5
+# telemetry. No database, no application services, no volumes.
+#
+#   docker compose up -d          start the broker
+#   docker compose logs -f mosquitto
+#   docker compose down           stop and remove
+#
+# =========================================================
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: campus-mosquitto
+    restart: unless-stopped
+
+    # 127.0.0.1 only: not published on the LAN or on any other
+    # interface, so the anonymous listener is reachable from
+    # this machine alone.
+    ports:
+      - "127.0.0.1:1883:1883"
+
+    volumes:
+      - ./docker/mosquitto/config.conf:/mosquitto/config/mosquitto.conf:ro
+
+    # No volume for /mosquitto/data: persistence is disabled in
+    # config.conf, so the broker writes nothing to survive a
+    # restart. `docker compose down` leaves no state behind.
+    command: mosquitto -c /mosquitto/config/mosquitto.conf
+
+    healthcheck:
+      # Round-trips a message through the broker on a scratch
+      # topic. Proves the listener works, not just that the
+      # process is alive.
+      test:
+        - CMD-SHELL
+        - >
+          rm -f /tmp/hc.out;
+          mosquitto_sub -h localhost -p 1883 -t 'healthcheck' -C 1 -W 5
+          > /tmp/hc.out &
+          sleep 1;
+          mosquitto_pub -h localhost -p 1883 -t 'healthcheck' -m 'ping';
+          sleep 1;
+          grep -q ping /tmp/hc.out
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 10s
+
+    security_opt:
+      - no-new-privileges:true

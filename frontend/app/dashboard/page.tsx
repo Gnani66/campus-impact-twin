@@ -6,6 +6,14 @@ import {
   getCampusTwin,
   type CampusTwinData,
 } from "@/lib/api";
+import {
+  formatMetricLabel,
+  formatReadingAge,
+  formatValue,
+  isSimulated,
+  newestTimestamp,
+} from "@/lib/telemetry";
+import { useTelemetry } from "@/lib/useTelemetry";
 import { TWIN_CONFIG } from "@/lib/twin/config";
 
 export default function DashboardPage() {
@@ -17,6 +25,37 @@ export default function DashboardPage() {
 
   const [error, setError] =
     useState<string | null>(null);
+
+  // Next 16 blocks Date.now() during prerender, so the clock
+  // starts on the client and stays null until then.
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Deferred, not synchronous: a setState in the effect body
+    // itself would cascade a render.
+    const start = setTimeout(
+      () => setNow(Date.now()),
+      0,
+    );
+
+    const timer = setInterval(
+      () => setNow(Date.now()),
+      30_000,
+    );
+
+    return () => {
+      clearTimeout(start);
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Separate from the twin fetch on purpose: telemetry can
+  // fail without taking the campus twin view down with it.
+  const telemetry = useTelemetry({
+    campusCode: TWIN_CONFIG.campusCode,
+  });
+
+  const dataAsOf = newestTimestamp(telemetry.data);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +169,123 @@ export default function DashboardPage() {
             label="Incidents"
             value={twin.incidents.length}
           />
+        </section>
+
+        <section className="mt-10">
+          <Panel
+            title="Latest stored telemetry"
+            subtitle="Readings stored in the database, not a live stream."
+          >
+            {telemetry.loading ? (
+              <p className="text-sm text-slate-500">
+                Loading telemetry...
+              </p>
+            ) : telemetry.error && !telemetry.data ? (
+              <div className="rounded-xl border border-red-900 bg-red-950/30 p-4">
+                <p className="text-sm text-red-300">
+                  Telemetry is unavailable:{" "}
+                  {telemetry.error}
+                </p>
+
+                <p className="mt-2 text-xs text-slate-500">
+                  The campus twin above is unaffected.
+                </p>
+              </div>
+            ) : !telemetry.data ||
+              telemetry.data.reading_count === 0 ? (
+              <p className="text-sm text-slate-500">
+                No readings stored for this campus yet.
+                Markers and this panel stay empty until the
+                telemetry pipeline runs.
+              </p>
+            ) : (
+              <>
+                {telemetry.refreshFailed && (
+                  <p className="mb-3 rounded-lg border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+                    Showing the last successful refresh. The
+                    latest attempt failed:{" "}
+                    {telemetry.error}
+                  </p>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <span>
+                    {telemetry.data.reading_count} of{" "}
+                    {telemetry.data.sensors_considered}{" "}
+                    sensors
+                    {telemetry.data.sensors_without_readings
+                      .length > 0 && (
+                      <>
+                        {" · "}
+                        no data:{" "}
+                        {telemetry.data.sensors_without_readings.join(
+                          ", ",
+                        )}
+                      </>
+                    )}
+                  </span>
+
+                  <span>
+                    {dataAsOf && now !== null
+                      ? `Data as of ${dataAsOf} (${formatReadingAge(dataAsOf, now)})`
+                      : "Reading timestamps unavailable"}
+                  </span>
+                </div>
+
+                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {telemetry.data.readings.map(
+                    (reading) => (
+                      <li
+                        key={reading.sensor_id}
+                        className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium">
+                            {reading.sensor_code ??
+                              reading.sensor_id}
+                          </span>
+
+                          <span className="text-xs uppercase text-cyan-400">
+                            {formatMetricLabel(
+                              reading.metric,
+                            )}
+                          </span>
+                        </div>
+
+                        <p className="mt-2 text-2xl font-semibold tabular-nums">
+                          {formatValue(reading)}
+                        </p>
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          {reading.zone_code ??
+                            "unknown zone"}
+                          {" · "}
+                          {now !== null
+                            ? formatReadingAge(
+                                reading.timestamp,
+                                now,
+                              )
+                            : ""}
+
+                          {isSimulated(reading) && (
+                            <span className="ml-2 text-amber-400/90">
+                              simulated
+                            </span>
+                          )}
+
+                          {reading.quality !== "good" && (
+                            <span className="ml-2 text-amber-400/90">
+                              quality: {reading.quality}
+                            </span>
+                          )}
+                        </p>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </>
+            )}
+          </Panel>
         </section>
 
         <section className="mt-10 grid gap-6 lg:grid-cols-2">
@@ -297,9 +453,11 @@ function Metric({
 
 function Panel({
   title,
+  subtitle,
   children,
 }: {
   title: string;
+  subtitle?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -307,6 +465,12 @@ function Panel({
       <h2 className="text-lg font-semibold">
         {title}
       </h2>
+
+      {subtitle && (
+        <p className="mt-1 text-xs text-slate-500">
+          {subtitle}
+        </p>
+      )}
 
       <div className="mt-5 space-y-3">
         {children}

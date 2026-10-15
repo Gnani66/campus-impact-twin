@@ -3,22 +3,53 @@
 import { Html } from "@react-three/drei";
 
 import type { Sensor } from "@/lib/types";
+import type { LatestTelemetryReading } from "@/lib/types";
+import {
+  formatReadingAge,
+  formatValue,
+  isSimulated,
+} from "@/lib/telemetry";
 
 import {
   formatMarkerLabel,
   type MarkerStyle,
 } from "@/lib/twin/config";
+
 interface SensorMarkerProps {
   sensor: Sensor;
   marker: MarkerStyle;
+  /**
+   * Latest stored reading for this sensor, if one exists.
+   * Absent means "no stored data", never a value to guess.
+   */
+  reading?: LatestTelemetryReading;
+  /**
+   * Passed in by the page rather than read from the clock in
+   * render, so every marker in one frame agrees on the time.
+   */
+  now: number | null;
 }
 
 export default function SensorMarker({
   sensor,
   marker,
+  reading,
+  now,
 }: SensorMarkerProps) {
   const inactive =
     sensor.status !== "active";
+
+  // A missing or unusable reading is shown as such, never as
+  // zero.
+  const hasReading =
+    reading !== undefined &&
+    Number.isFinite(reading.value);
+
+  const simulated = isSimulated(reading);
+
+  const label = hasReading
+    ? formatValue(reading)
+    : "no data";
 
   return (
     <group
@@ -34,7 +65,7 @@ export default function SensorMarker({
           color={marker.color}
           emissive={marker.color}
           emissiveIntensity={
-            inactive ? 0.1 : 0.7
+            inactive ? 0.1 : hasReading ? 0.7 : 0.25
           }
           opacity={inactive ? 0.4 : 1}
           transparent={inactive}
@@ -67,6 +98,24 @@ export default function SensorMarker({
               sensor.sensor_type,
             )}
           </span>
+
+          <div className="mt-0.5 font-medium text-white">
+            {label}
+          </div>
+
+          <div className="text-[10px] text-slate-500">
+            {hasReading && reading
+              ? now !== null
+                ? formatReadingAge(reading.timestamp, now)
+                : "age unknown"
+              : "no stored reading"}
+
+            {simulated ? (
+              <span className="ml-1 text-amber-400/90">
+                simulated
+              </span>
+            ) : null}
+          </div>
         </div>
       </Html>
     </group>

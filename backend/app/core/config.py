@@ -13,6 +13,20 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_service_role_key: str
 
+    # Telemetry engine (Phase 5). Disabled by default so the
+    # API starts unchanged. MQTT_HOST and MQTT_PORT default to
+    # the broker started by `docker compose up -d`.
+    mqtt_enabled: bool = False
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    mqtt_topic_prefix: str = "smart-campus"
+
+    # How often the simulator produces a reading per sensor,
+    # and how often buffered readings are flushed to
+    # Supabase.
+    telemetry_tick_seconds: int = 5
+    telemetry_flush_seconds: int = 10
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

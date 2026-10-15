@@ -6,6 +6,11 @@ import {
   getCampusTwin,
   type CampusTwinData,
 } from "@/lib/api";
+import { useTelemetry } from "@/lib/useTelemetry";
+import {
+  formatReadingAge,
+  newestTimestamp,
+} from "@/lib/telemetry";
 import { TWIN_CONFIG } from "@/lib/twin/config";
 
 import TwinCanvas from "@/components/TwinCanvas";
@@ -58,6 +63,38 @@ export default function TwinPage() {
     (item) => item.code === TWIN_CONFIG.zoneCode,
   );
 
+  // One polling loop for this page. Readings refresh the
+  // labels only; the scene geometry is untouched.
+  const telemetry = useTelemetry({
+    campusCode: TWIN_CONFIG.campusCode,
+    zone: TWIN_CONFIG.zoneCode,
+  });
+
+  // Next 16 blocks Date.now() during prerender, so the clock
+  // starts on the client and stays null until then.
+  const [now, setNow] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Deferred, not synchronous: a setState in the effect body
+    // itself would cascade a render.
+    const start = setTimeout(
+      () => setNow(Date.now()),
+      0,
+    );
+
+    const timer = setInterval(
+      () => setNow(Date.now()),
+      30_000,
+    );
+
+    return () => {
+      clearTimeout(start);
+      clearInterval(timer);
+    };
+  }, []);
+
+  const dataAsOf = newestTimestamp(telemetry.data);
+
   return (
     <main className="flex h-screen flex-col bg-slate-950 text-white">
       <header className="z-10 flex flex-wrap items-center justify-between gap-4 border-b border-white/10 bg-slate-950/80 px-6 py-4 backdrop-blur-md">
@@ -101,6 +138,11 @@ export default function TwinPage() {
             value={twin?.incidents.length}
           />
 
+          <Stat
+            label="Readings"
+            value={telemetry.data?.reading_count}
+          />
+
           <span className="flex items-center gap-2 text-xs text-slate-400">
             <span
               className={`h-2 w-2 rounded-full ${
@@ -114,7 +156,28 @@ export default function TwinPage() {
               ? "API offline"
               : loading
                 ? "Connecting"
-                : "Live data"}
+                : "Twin data loaded"}
+          </span>
+
+          <span className="text-right text-xs text-slate-500">
+            {telemetry.loading
+              ? "Loading telemetry..."
+              : telemetry.refreshFailed
+                ? "Telemetry refresh failed"
+                : telemetry.error
+                  ? "Telemetry unavailable"
+                  : dataAsOf && now !== null
+                    ? `Stored data as of ${formatReadingAge(dataAsOf, now)}`
+                    : "No stored readings"}
+
+            {telemetry.data?.readings.some(
+              (reading) =>
+                reading.source === "simulator",
+            ) ? (
+              <span className="ml-2 text-amber-400/90">
+                simulated
+              </span>
+            ) : null}
           </span>
         </div>
       </header>
@@ -124,6 +187,8 @@ export default function TwinPage() {
           <TwinCanvas
             sensors={twin.sensors}
             equipment={twin.equipment}
+            readings={telemetry.readingsBySensorId}
+            now={now}
           />
         )}
 

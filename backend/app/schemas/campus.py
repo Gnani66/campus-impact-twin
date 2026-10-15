@@ -166,3 +166,67 @@ class CampusTwinResponse(BaseModel):
     equipment: List[EquipmentResponse]
     sensors: List[SensorResponse]
     incidents: List[IncidentResponse]
+
+
+class LatestTelemetryReadingResponse(BaseModel):
+    """
+    The most recent stored reading for one sensor.
+
+    `sensor_code`, `sensor_type` and the location codes come
+    from the sensor registry, not from the reading row, so a
+    reading stays identifiable even if the registry and the
+    stored row disagree about naming.
+    """
+
+    sensor_id: str
+    sensor_code: Optional[str] = None
+    sensor_type: Optional[str] = None
+
+    metric: str
+    value: float
+    unit: str
+    timestamp: datetime
+
+    source: str
+    quality: str
+
+    campus_id: Optional[str] = None
+    building_id: Optional[str] = None
+    floor_id: Optional[str] = None
+    zone_id: Optional[str] = None
+
+    campus_code: Optional[str] = None
+    building_code: Optional[str] = None
+    floor_code: Optional[str] = None
+    zone_code: Optional[str] = None
+
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+
+class LatestTelemetryResponse(BaseModel):
+    """
+    Latest readings for every registered sensor in scope.
+
+    Sensors with no stored readings are reported by code in
+    `sensors_without_readings` rather than being given a
+    fabricated value.
+    """
+
+    campus_code: str
+    campus_id: str
+
+    zone_code: Optional[str] = None
+
+    sensors_considered: int = 0
+    reading_count: int = 0
+
+    readings: List[LatestTelemetryReadingResponse] = Field(
+        default_factory=list
+    )
+    sensors_without_readings: List[str] = Field(
+        default_factory=list
+    )
+
+    generated_at: datetime

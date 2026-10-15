@@ -122,3 +122,44 @@ export interface TelemetryReading {
   quality: string;
   metadata: Record<string, unknown>;
 }
+
+/**
+ * Latest stored telemetry, as returned by
+ * GET /api/v1/campus/{campus_code}/telemetry/latest.
+ *
+ * Values come from the database. They are not live: with MQTT
+ * disabled the newest reading is only as fresh as the last
+ * write, which `timestamp` records.
+ */
+
+export interface LatestTelemetryReading {
+  sensor_id: string;
+  sensor_code: string | null;
+  sensor_type: string | null;
+  metric: string;
+  value: number;
+  unit: string;
+  timestamp: string;
+  source: string;
+  quality: string;
+  campus_id: string | null;
+  building_id: string | null;
+  floor_id: string | null;
+  zone_id: string | null;
+  campus_code: string | null;
+  building_code: string | null;
+  floor_code: string | null;
+  zone_code: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface LatestTelemetryData {
+  campus_code: string;
+  campus_id: string;
+  zone_code: string | null;
+  sensors_considered: number;
+  reading_count: number;
+  readings: LatestTelemetryReading[];
+  sensors_without_readings: string[];
+  generated_at: string;
+}
