@@ -71,6 +71,17 @@ BASELINE_SAMPLE_SIZE = 200
 # against, so the energy rule declines rather than guessing.
 BASELINE_MIN_SAMPLES = 3
 
+# Sensors in one tick share a timestamp, so a flush batch asks
+# the same context questions five times over. Memoising on that
+# shared key keeps one query per tick instead of one per sensor.
+CONTEXT_CACHE_SIZE = 256
+
+# Context reads are retried on a transient failure: telemetry is
+# already committed by then, so a dropped connection would
+# silently cost an incident that cannot be recovered later.
+CONTEXT_RETRY_ATTEMPTS = 3
+CONTEXT_RETRY_BACKOFF_SECONDS = 0.2
+
 OPEN_STATUSES = ("open", "acknowledged", "investigating")
 
 
@@ -107,6 +118,7 @@ class IntelligenceService:
             lambda: datetime.now(timezone.utc)
         )
         self._contexts: Dict[str, ZoneContext] = {}
+        self._read_cache: Dict[tuple, List[Dict[str, Any]]] = {}
         self._lock = threading.Lock()
 
         self.evaluated = 0
@@ -193,8 +205,14 @@ class IntelligenceService:
         if context is None:
             return None
 
+        # Context must describe the moment of the reading, not
+        # the moment the batch happened to be flushed.
+        observed_at = self._as_datetime(
+            row.get("timestamp")
+        )
+
         rule_context = self._rule_context(
-            zone_id, metric
+            zone_id, metric, observed_at
         )
 
         result = evaluate_metric(
@@ -210,9 +228,7 @@ class IntelligenceService:
             result=result,
             context=context,
             sensor_id=row.get("sensor_id"),
-            timestamp=self._as_datetime(
-                row.get("timestamp")
-            ),
+            timestamp=observed_at,
             metric=metric,
             value=float(value),
         )
@@ -251,8 +267,16 @@ class IntelligenceService:
         timestamp: datetime,
     ) -> Optional[Dict[str, Any]]:
         """
-        Spec-facing entry point: evaluate a reading identified by
-        sensor, without needing a full telemetry row.
+        Evaluates a reading identified by sensor.
+
+        The spec-facing entry point: it exists so a caller can
+        ask "would this reading raise an incident?" without
+        holding a full telemetry row.
+
+        It deliberately does not reimplement anything. The sensor
+        is resolved, the reading is shaped into a row, and
+        `process_reading` does the rest. Two independent paths
+        through the rules would inevitably drift apart.
         """
 
         sensor = self._sensor(sensor_id)
@@ -267,29 +291,18 @@ class IntelligenceService:
         if zone_id is None:
             return None
 
-        context = self._zone_context(zone_id)
-
-        if context is None:
-            return None
-
-        result = evaluate_metric(
-            metric,
-            float(value),
-            self._rule_context(zone_id, metric),
-        )
-
-        if result is None:
-            return None
-
-        self.fired += 1
-
-        return self._persist(
-            result=result,
-            context=context,
-            sensor_id=sensor_id,
-            timestamp=timestamp,
-            metric=metric,
-            value=value,
+        return self.process_reading(
+            {
+                "zone_id": zone_id,
+                "sensor_id": sensor["id"],
+                "metric": metric,
+                "value": float(value),
+                "timestamp": (
+                    timestamp.isoformat()
+                    if isinstance(timestamp, datetime)
+                    else timestamp
+                ),
+            }
         )
 
     # --- rule context --------------------------------------------
@@ -298,6 +311,7 @@ class IntelligenceService:
         self,
         zone_id: str,
         metric: str,
+        observed_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
         The keyword arguments the rules for `metric` accept.
@@ -309,13 +323,15 @@ class IntelligenceService:
         """
 
         context: Dict[str, Any] = {
-            "occupancy": self._latest_occupancy(zone_id),
+            "occupancy": self._occupancy_at(
+                zone_id, observed_at
+            ),
             "capacity": self._capacity(zone_id),
         }
 
         if metric == "energy":
             context["baseline_kw"] = self._energy_baseline(
-                zone_id
+                zone_id, observed_at
             )
 
         return context
@@ -328,12 +344,28 @@ class IntelligenceService:
 
         return context.capacity if context else None
 
-    def _latest_occupancy(
+    def _occupancy_at(
         self,
         zone_id: str,
+        at: Optional[datetime],
     ) -> Optional[float]:
+        """
+        Occupancy as it stood when the reading was taken.
+
+        Read "as of" the reading rather than as the newest value,
+        because evaluation runs after the write. Quoting the
+        newest occupancy would attach evidence from a moment the
+        reading never saw: a CO2 spike recorded during a full
+        hall could be filed against an empty hall, which points a
+        reviewer at a faulty sensor instead of at ventilation.
+        """
+
         rows = self._recent_readings(
-            zone_id, "occupancy", limit=1
+            zone_id,
+            "occupancy",
+            limit=1,
+            at=at,
+            cache_key=("occupancy", zone_id, at),
         )
 
         if not rows:
@@ -344,6 +376,7 @@ class IntelligenceService:
     def _energy_baseline(
         self,
         zone_id: str,
+        at: Optional[datetime] = None,
     ) -> Optional[float]:
         """
         Approximates a zone's normal draw.
@@ -352,10 +385,18 @@ class IntelligenceService:
         sustained fault does not drag the baseline up and quietly
         stop the rule from firing. A high percentile would be
         worse still: the baseline would track the fault exactly.
+
+        The window is bounded to readings at or before the
+        reading being judged, for the same reason occupancy is:
+        the baseline must describe the zone as it was.
         """
 
         rows = self._recent_readings(
-            zone_id, "energy", limit=BASELINE_SAMPLE_SIZE
+            zone_id,
+            "energy",
+            limit=BASELINE_SAMPLE_SIZE,
+            at=at,
+            cache_key=("energy", zone_id, at),
         )
 
         values = sorted(
@@ -374,14 +415,46 @@ class IntelligenceService:
         zone_id: str,
         metric: str,
         limit: int,
+        at: Optional[datetime] = None,
+        cache_key: Optional[tuple] = None,
     ) -> List[Dict[str, Any]]:
-        result = (
+        """
+        Reads a metric for a zone, newest first.
+
+        `at` bounds the query to readings taken at or before that
+        instant. Evaluation happens after the write, so by then
+        the zone may have moved on; without the bound the
+        evidence attached to an incident describes a moment that
+        is not the moment the reading came from.
+
+        Sensors in one tick share a timestamp, so every reading in
+        a flush batch asks the identical question. The result is
+        memoised on that shared key, which turns five queries per
+        batch into one and keeps a burst of traffic from opening
+        a connection per sensor. The cache is an optimisation
+        only: a cold or evicted cache costs one extra query and
+        never changes an answer.
+        """
+
+        if cache_key is not None:
+            cached = self._read_cache.get(cache_key)
+
+            if cached is not None:
+                return cached
+
+        query = (
             get_supabase()
             .table("telemetry_readings")
             .select("value,timestamp")
             .eq("zone_id", zone_id)
             .eq("metric", metric)
-            .order(
+        )
+
+        if at is not None:
+            query = query.lte("timestamp", at.isoformat())
+
+        rows = self._read_with_retry(
+            lambda: query.order(
                 "timestamp",
                 desc=True,
             )
@@ -389,7 +462,44 @@ class IntelligenceService:
             .execute()
         )
 
-        return result.data or []
+        if cache_key is not None:
+            with self._lock:
+                if len(self._read_cache) >= CONTEXT_CACHE_SIZE:
+                    self._read_cache.clear()
+
+                self._read_cache[cache_key] = rows
+
+        return rows
+
+    @staticmethod
+    def _read_with_retry(call):
+        """
+        Retries a context read on a transient failure.
+
+        Telemetry is already committed by the time the engine
+        runs, so a dropped connection would silently cost an
+        incident that can never be recovered afterwards. Context
+        reads are cheap, so retrying is the right trade.
+        """
+
+        last_error: Optional[Exception] = None
+
+        for attempt in range(CONTEXT_RETRY_ATTEMPTS):
+            try:
+                result = call()
+
+                return result.data or []
+
+            except Exception as exc:
+                last_error = exc
+
+                if attempt + 1 < CONTEXT_RETRY_ATTEMPTS:
+                    time.sleep(
+                        CONTEXT_RETRY_BACKOFF_SECONDS
+                        * (attempt + 1)
+                    )
+
+        raise last_error  # type: ignore[misc]
 
     # --- zone context --------------------------------------------
 
@@ -925,9 +1035,6 @@ class IntelligenceService:
         )
 
         return rows[0]["id"] if rows else None
-
-    def stats_snapshot(self) -> Dict[str, Any]:
-        return self.stats
 
 
 # Process-wide instance. The caches on it are process-local and

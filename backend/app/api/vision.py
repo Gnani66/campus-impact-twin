@@ -15,6 +15,7 @@ upload. See the router registration in `app.main`.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import (
@@ -72,6 +73,59 @@ SERVER_FAULT_DETAIL = (
 )
 
 
+def _parse_observed_at(
+    raw: Optional[str],
+) -> Optional[datetime]:
+    """
+    Parses the optional `observed_at` form field.
+
+    An absent or blank value means "the server decides", which is
+    the historical behaviour and is not idempotent.
+
+    A malformed value is rejected rather than ignored. Silently
+    falling back to a server timestamp would defeat the entire
+    purpose of the field: the caller asked for a retry to reuse a
+    row, would be told it succeeded, and would have written a
+    duplicate without ever learning why.
+
+    A naive timestamp is read as UTC, matching the service's own
+    normalisation, so the value stored is the value sent.
+
+    A non-string is treated as absent. Calling this handler
+    directly, rather than through FastAPI, passes the unpopulated
+    `Form` sentinel as the default, and that means the same thing
+    as not supplying the field.
+    """
+
+    if not isinstance(raw, str):
+        return None
+
+    text = raw.strip()
+
+    if not text:
+        return None
+
+    normalised = text[:-1] + "+00:00" if text.endswith(
+        "Z"
+    ) else text
+
+    try:
+        parsed = datetime.fromisoformat(normalised)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "observed_at must be an ISO-8601 timestamp, "
+                "for example 2026-10-16T09:30:00Z"
+            ),
+        ) from None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed
+
+
 def _fail(exc: Exception) -> HTTPException:
     """
     Maps a vision failure onto the project's established error
@@ -86,7 +140,10 @@ def _fail(exc: Exception) -> HTTPException:
     """
 
     if isinstance(exc, UploadTooLargeError):
-        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+        # The `..._CONTENT_TOO_LARGE` spelling is the current one;
+        # `HTTP_413_REQUEST_ENTITY_TOO_LARGE` is deprecated and
+        # emits a DeprecationWarning on access.
+        code = status.HTTP_413_CONTENT_TOO_LARGE
     elif isinstance(exc, UnsupportedFormatError):
         code = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
     elif isinstance(exc, ZoneNotFoundError):
@@ -146,6 +203,18 @@ async def analyze_image(
         ...,
         description="Zone the image was taken in.",
     ),
+    observed_at: Optional[str] = Form(
+        default=None,
+        description=(
+            "ISO-8601 capture time. Supplying it makes the "
+            "write idempotent: retrying the same camera, zone "
+            "and timestamp reuses the stored row instead of "
+            "creating a duplicate. Omit it and every request is "
+            "a new observation. A client-supplied timestamp is "
+            "recorded as sent, so it is only appropriate when "
+            "replaying a known capture."
+        ),
+    ),
 ) -> VisionAnalysisResponse:
     """
     Analyses one uploaded image.
@@ -153,6 +222,14 @@ async def analyze_image(
     The response is returned only after the observation has
     been written. If persistence fails the request fails, and
     no success is reported.
+
+    `observed_at` is optional. It exists so a caller that times
+    out mid-request can retry safely: without it a retry is
+    indistinguishable from a second capture and writes a second
+    row. It is deliberately not synthesised here, because a
+    server-generated key would have to be either unique per call
+    (which never matches) or a fixed bucket (which would
+    silently discard genuinely distinct observations).
     """
 
     if not camera_id or not camera_id.strip():
@@ -178,12 +255,15 @@ async def analyze_image(
 
     payload = await image.read(MAX_READ_BYTES + 1)
 
+    capture_time = _parse_observed_at(observed_at)
+
     try:
         return vision_service.analyze(
             camera_id=camera_id.strip(),
             zone_code=zone_code.strip(),
             image_bytes=payload,
             declared_content_type=image.content_type,
+            observed_at=capture_time,
         )
     except VisionError as exc:
         logger.warning(

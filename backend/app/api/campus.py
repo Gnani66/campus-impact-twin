@@ -249,7 +249,7 @@ def get_campus_twin(
             ),
             detail=(
                 "Failed to load campus twin for "
-                f"'{campus_code}': {exc}"
+                f"'{campus_code}'."
             ),
         ) from exc
 

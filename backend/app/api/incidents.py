@@ -7,6 +7,8 @@ telemetry is persisted, never written directly through this API.
 
 from typing import Optional
 
+import logging
+
 from fastapi import (
     APIRouter,
     HTTPException,
@@ -18,16 +20,28 @@ from app.core.config import settings
 from app.schemas.intelligence import (
     IncidentResponse,
     IntelligenceSummary,
-    RuleEvaluationResponse,
 )
 from app.services.intelligence_service import (
     intelligence_service,
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 router = APIRouter(
     prefix="/api/v1/incidents",
     tags=["Incidents"],
+)
+
+
+# Returned to the client when a query fails for an unexpected
+# reason. The underlying exception names the table, column or
+# connection detail involved, so it is logged for the operator
+# and never sent to the caller. Mirrors the rule already applied
+# by the vision API.
+INCIDENTS_FAULT_DETAIL = (
+    "Failed to load incident data."
 )
 
 
@@ -46,14 +60,18 @@ def get_incident_summary(
             campus_code
         )
     except Exception as exc:
+        # The traceback is logged here; the client receives a
+        # fixed message so internal detail is never disclosed.
+        logger.exception(
+            "Failed to load incident summary for '%s'",
+            campus_code,
+        )
+
         raise HTTPException(
             status_code=(
                 status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
-            detail=(
-                "Failed to load incident summary: "
-                f"{exc}"
-            ),
+            detail=INCIDENTS_FAULT_DETAIL,
         ) from exc
 
 
@@ -107,12 +125,14 @@ def get_incidents(
         ]
 
     except Exception as exc:
+        logger.exception(
+            "Failed to load incidents for '%s'",
+            campus_code,
+        )
+
         raise HTTPException(
             status_code=(
                 status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
-            detail=(
-                "Failed to load incidents: "
-                f"{exc}"
-            ),
+            detail=INCIDENTS_FAULT_DETAIL,
         ) from exc

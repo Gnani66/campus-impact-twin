@@ -902,6 +902,7 @@ def test_enabled_leaves_health_unchanged(monkeypatch):
 
     from app.core.config import settings
     from app.main import vision_health
+    from app.services.vision_service import vision_service
 
     monkeypatch.setattr(
         settings, "vision_enabled", True
@@ -911,13 +912,56 @@ def test_enabled_leaves_health_unchanged(monkeypatch):
         raising=False,
     )
 
+    # Availability is decided by whether the weights file resolves
+    # on disk. Those weights are a large binary, gitignored and
+    # fetched separately, so a fresh clone and a CI runner have
+    # none of them. Asserting a real detector here would make the
+    # test pass or fail depending on whether somebody happened to
+    # download the model, so the resolution seam is stubbed
+    # instead. `test_health_reports_detector_absent` covers the
+    # opposite case.
+    monkeypatch.setattr(
+        vision_service.detector,
+        "resolve_weights_path",
+        lambda: "/nonexistent/yolo11n.pt",
+    )
+
     report = vision_health()
 
     assert report["enabled"] is True
     assert report["routes_registered"] is True
-    # Weights are present in this checkout, so the detector is
-    # genuinely available.
     assert report["detector_available"] is True
+    assert report["model_name"] == "yolo11n.pt"
+
+
+def test_health_reports_detector_absent(monkeypatch):
+    """
+    Enabled routes with no weights is the state a fresh clone is
+    in. Health must say so rather than implying the engine works.
+    """
+
+    from app.core.config import settings
+    from app.main import vision_health
+    from app.services.vision_service import vision_service
+
+    monkeypatch.setattr(
+        settings, "vision_enabled", True
+    )
+    monkeypatch.setattr(
+        "app.main.VISION_ROUTES_ENABLED", True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        vision_service.detector,
+        "resolve_weights_path",
+        lambda: None,
+    )
+
+    report = vision_health()
+
+    assert report["enabled"] is True
+    assert report["routes_registered"] is True
+    assert report["detector_available"] is False
     assert report["model_name"] == "yolo11n.pt"
 
 
@@ -942,3 +986,199 @@ def test_disabled_does_not_affect_other_routers(monkeypatch):
 
     assert any("twin" in p for p in registered_paths)
     assert "/api/v1/incidents" in registered_paths
+
+
+# ============================================================
+# IDEMPOTENT WRITES (R4)
+# ============================================================
+#
+# A caller that times out mid-request cannot tell whether the
+# observation was stored, so it retries. Before `observed_at`
+# reached the HTTP layer, every retry was indistinguishable from
+# a second capture and wrote a second row. These tests pin the
+# parameter down to the service, where deduplication already
+# existed and could not be reached.
+
+
+def _recording_service(monkeypatch, recorded):
+    from app.api import vision as vision_api
+    from app.schemas.vision import VisionAnalysisResponse
+    from app.services.vision_service import VisionService
+    from vision_fakes import StubDetector, detection_result
+
+    class RecordingService(VisionService):
+        def analyze(self, **kwargs):
+            recorded.update(kwargs)
+
+            from datetime import datetime, timezone
+
+            return VisionAnalysisResponse(
+                camera_id=kwargs["camera_id"],
+                zone_code=kwargs["zone_code"],
+                people_count=1,
+                confidence=0.9,
+                observed_at=datetime.now(timezone.utc),
+                detections=[],
+            )
+
+    monkeypatch.setattr(
+        vision_api,
+        "vision_service",
+        RecordingService(
+            detector=StubDetector(detection_result())
+        ),
+    )
+
+
+@requires_multipart
+def test_observed_at_reaches_the_service(monkeypatch):
+    from app.api.vision import analyze_image
+    from vision_fakes import make_png
+
+    recorded = {}
+    _recording_service(monkeypatch, recorded)
+
+    _run(
+        analyze_image(
+            image=_upload(make_png(), "image/png"),
+            camera_id="cam-1",
+            zone_code="LH01",
+            observed_at="2026-10-16T09:30:00Z",
+        )
+    )
+
+    assert recorded["observed_at"] is not None
+    assert recorded["observed_at"].hour == 9
+
+
+@requires_multipart
+def test_omitted_observed_at_stays_none(monkeypatch):
+    """
+    Absent stays absent. Synthesising a server timestamp here
+    would opt every request into deduplication, and a timestamp
+    generated per call never matches anything.
+    """
+
+    from app.api.vision import analyze_image
+    from vision_fakes import make_png
+
+    recorded = {}
+    _recording_service(monkeypatch, recorded)
+
+    _run(
+        analyze_image(
+            image=_upload(make_png(), "image/png"),
+            camera_id="cam-1",
+            zone_code="LH01",
+        )
+    )
+
+    assert recorded["observed_at"] is None
+
+
+@requires_multipart
+def test_blank_observed_at_stays_none(monkeypatch):
+    from app.api.vision import analyze_image
+    from vision_fakes import make_png
+
+    recorded = {}
+    _recording_service(monkeypatch, recorded)
+
+    _run(
+        analyze_image(
+            image=_upload(make_png(), "image/png"),
+            camera_id="cam-1",
+            zone_code="LH01",
+            observed_at="   ",
+        )
+    )
+
+    assert recorded["observed_at"] is None
+
+
+@requires_multipart
+def test_malformed_observed_at_is_rejected(
+    monkeypatch,
+):
+    """
+    A bad timestamp must fail loudly. Falling back to a server
+    time would report success while writing the duplicate the
+    caller was specifically trying to avoid.
+    """
+
+    from fastapi import HTTPException
+
+    from app.api.vision import analyze_image
+    from vision_fakes import make_png
+
+    recorded = {}
+    _recording_service(monkeypatch, recorded)
+
+    with pytest.raises(HTTPException) as caught:
+        _run(
+            analyze_image(
+                image=_upload(make_png(), "image/png"),
+                camera_id="cam-1",
+                zone_code="LH01",
+                observed_at="yesterday",
+            )
+        )
+
+    assert (
+        caught.value.status_code == 400
+    )
+    assert "ISO-8601" in caught.value.detail
+    assert recorded == {}, "no analysis should have run"
+
+
+@requires_multipart
+def test_naive_observed_at_is_read_as_utc(monkeypatch):
+    from app.api.vision import analyze_image
+    from vision_fakes import make_png
+
+    recorded = {}
+    _recording_service(monkeypatch, recorded)
+
+    _run(
+        analyze_image(
+            image=_upload(make_png(), "image/png"),
+            camera_id="cam-1",
+            zone_code="LH01",
+            observed_at="2026-10-16T09:30:00",
+        )
+    )
+
+    sent = recorded["observed_at"]
+    assert sent.tzinfo is not None
+    assert sent.utcoffset().total_seconds() == 0
+
+
+@requires_multipart
+def test_retry_with_same_timestamp_reaches_dedup(
+    monkeypatch,
+):
+    """
+    Two identical requests carrying the same capture time must
+    produce identical persistence intent, so the service can
+    recognise the second as a repeat.
+    """
+
+    from app.api.vision import analyze_image
+    from vision_fakes import make_png
+
+    recorded = {}
+    _recording_service(monkeypatch, recorded)
+
+    for _ in range(2):
+        _run(
+            analyze_image(
+                image=_upload(make_png(), "image/png"),
+                camera_id="cam-1",
+                zone_code="LH01",
+                observed_at="2026-10-16T09:30:00Z",
+            )
+        )
+
+    # Both calls carried the same instant, which is the condition
+    # the service deduplicates on.
+    assert recorded["observed_at"] == recorded["observed_at"]

@@ -14,6 +14,7 @@ import pytest
 
 from app.services import intelligence_service as module
 from app.services.intelligence_service import (
+    CONTEXT_CACHE_SIZE,
     IntelligenceService,
 )
 
@@ -36,6 +37,22 @@ def iso(offset_seconds: float = 0.0) -> str:
     )
 
 
+def _as_epoch(value) -> float:
+    """
+    Parses a timestamp for comparison, accepting both the "Z" and
+    "+00:00" spellings of UTC.
+    """
+
+    parsed = datetime.fromisoformat(
+        str(value).replace("Z", "+00:00")
+    )
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.timestamp()
+
+
 class FakeResult:
     def __init__(self, data):
         self.data = data
@@ -51,6 +68,7 @@ class FakeQuery:
         self._store = store
         self._name = name
         self._filters = {}
+        self._bounds = {}
         self._orders = []
         self._limit = None
         self._payload = None
@@ -64,6 +82,10 @@ class FakeQuery:
 
     def in_(self, column, values):
         self._filters[column] = list(values)
+        return self
+
+    def lte(self, column, value):
+        self._bounds[column] = value
         return self
 
     def order(self, column, desc=False):
@@ -101,6 +123,18 @@ class FakeQuery:
                     for row in rows
                     if row.get(column) == wanted
                 ]
+
+        for column, bound in self._bounds.items():
+            # PostgREST compares these as timestamps. String
+            # comparison would be wrong: "…Z" sorts after
+            # "…+00:00", so an equal instant would be excluded.
+            rows = [
+                row
+                for row in rows
+                if row.get(column) is not None
+                and _as_epoch(row.get(column))
+                <= _as_epoch(bound)
+            ]
 
         # Chained .order() calls sort by each column in turn,
         # most significant first.
@@ -172,6 +206,14 @@ class FakeClient:
         self.reads.append(name)
 
         return FakeQuery(self.store, name)
+
+
+# The pristine `FakeQuery.execute`, captured before any test
+# monkeypatches it. Several tests below wrap `execute` more than
+# once, and re-reading `FakeQuery.execute` at that point returns
+# the previous wrapper rather than the real implementation, which
+# silently nests counters or fails on a missing `__wrapped__`.
+REAL_EXECUTE = FakeQuery.execute
 
 
 @pytest.fixture
@@ -503,8 +545,12 @@ class TestDeduplication:
 
 class TestEnergyBaseline:
     def _seed_energy(self, store, values):
+        # Stamped in the past: the baseline for a reading is
+        # built from what the zone did before that reading.
         store["telemetry_readings"] = [
-            reading("energy", value, offset=index)
+            reading(
+                "energy", value, offset=-(index + 1)
+            )
             for index, value in enumerate(values)
         ]
 
@@ -580,6 +626,251 @@ class TestFailureIsolation:
         )
 
         # Must not raise.
+        assert (
+            service.process_batch(
+                [reading("co2", 1900.0)]
+            )
+            == []
+        )
+        assert service.errors == 1
+
+
+class TestCreateIncident:
+    """
+    The spec-facing entry point. It must behave identically to
+    the batch path, otherwise the same reading could produce a
+    different verdict depending on how it arrived.
+    """
+
+    def test_healthy_reading_returns_none(
+        self, service
+    ):
+        assert (
+            service.create_incident(
+                SENSOR_ID, "co2", 450.0, NOW
+            )
+            is None
+        )
+
+    def test_breach_creates_an_incident(
+        self, service
+    ):
+        incident = service.create_incident(
+            SENSOR_ID, "co2", 1900.0, NOW
+        )
+
+        assert incident is not None
+        assert incident["severity"] == "critical"
+
+    def test_unknown_sensor_raises(self, service):
+        with pytest.raises(ValueError):
+            service.create_incident(
+                "nope", "co2", 1900.0, NOW
+            )
+
+    def test_resolves_sensor_by_code(
+        self, service, store
+    ):
+        """Operators refer to sensors by code; the topic
+        hierarchy uses UUIDs. Both must resolve."""
+
+        incident = service.create_incident(
+            "CO2-LH01", "co2", 1900.0, NOW
+        )
+
+        assert incident is not None
+        assert (
+            incident["sensor_id"] == SENSOR_ID
+        )
+
+    def test_shares_deduplication_with_the_batch_path(
+        self, service, store
+    ):
+        service.create_incident(
+            SENSOR_ID, "co2", 1900.0, NOW
+        )
+        service.process_reading(
+            reading("co2", 1900.0)
+        )
+
+        assert len(store["incidents"]) == 1
+
+
+class TestEvidenceIsContemporaneous:
+    """
+    Evaluation runs after the write, so the zone may have moved
+    on. Evidence must describe the moment of the reading.
+    """
+
+    def test_occupancy_is_read_as_of_the_reading(
+        self, service, store
+    ):
+        # Occupancy was 58 when the CO2 spike was taken, and had
+        # fallen to 0 by the time the batch was evaluated.
+        store["telemetry_readings"] = [
+            {
+                "zone_id": ZONE_ID,
+                "metric": "occupancy",
+                "value": 58.0,
+                "timestamp": iso(-60),
+            },
+            {
+                "zone_id": ZONE_ID,
+                "metric": "occupancy",
+                "value": 0.0,
+                "timestamp": iso(+60),
+            },
+        ]
+
+        incident = service.process_reading(
+            reading("co2", 1900.0, offset=0.0)
+        )
+
+        assert (
+            incident["evidence"][0]["occupancy"]
+            == 58.0
+        )
+
+    def test_newer_occupancy_is_not_used(
+        self, service, store
+    ):
+        store["telemetry_readings"] = [
+            {
+                "zone_id": ZONE_ID,
+                "metric": "occupancy",
+                "value": 0.0,
+                "timestamp": iso(+60),
+            },
+        ]
+
+        incident = service.process_reading(
+            reading("co2", 1900.0, offset=0.0)
+        )
+
+        assert (
+            incident["evidence"][0].get("occupancy")
+            is None
+        )
+
+
+class TestContextEfficiency:
+    """
+    One tick stamps every sensor with the same timestamp, so a
+    flush batch asks the same question once per sensor. Without
+    memoisation that is five identical queries, and a burst of
+    traffic means a dropped connection costs an incident.
+    """
+
+    def _count_queries(
+        self,
+        store,
+        monkeypatch,
+    ):
+        """
+        Counts real database reads, not calls into the service.
+
+        The memo lives inside `_recent_readings`, so wrapping that
+        method would count cache hits too and prove nothing.
+        Counting at `FakeQuery.execute` counts what actually
+        reaches the database.
+
+        `get_supabase` is re-pointed at a client bound to the same
+        store the fixture used, so seeded rows stay visible.
+        """
+
+        client = FakeClient(store)
+        counter = {"n": 0}
+
+        def counting(self):
+            if self._name == "telemetry_readings":
+                counter["n"] += 1
+
+            return REAL_EXECUTE(self)
+
+        monkeypatch.setattr(FakeQuery, "execute", counting)
+        monkeypatch.setattr(
+            module, "get_supabase", lambda: client
+        )
+
+        return counter
+
+    def test_identical_queries_are_memoised(
+        self, service, store, monkeypatch
+    ):
+        seed_occupancy(store, 40.0)
+
+        counter = self._count_queries(store, monkeypatch)
+
+        for _ in range(5):
+            service.process_reading(
+                reading("co2", 1900.0)
+            )
+
+        # Five sensors, one tick, one shared timestamp: the
+        # occupancy context is read once, not five times.
+        assert counter["n"] == 1
+
+    def test_cache_is_bounded(self, service, store):
+        store["telemetry_readings"] = []
+
+        for index in range(400):
+            service.process_reading(
+                reading(
+                    "co2", 1900.0, offset=float(index)
+                )
+            )
+
+        assert (
+            len(service._read_cache)
+            <= CONTEXT_CACHE_SIZE
+        )
+
+    def test_transient_failure_is_retried(
+        self, service, store, monkeypatch
+    ):
+        seed_occupancy(store, 40.0)
+
+        self._count_queries(store, monkeypatch)
+
+        attempts = {"n": 0}
+
+        def flaky(self):
+            if self._name == "telemetry_readings":
+                attempts["n"] += 1
+
+                if attempts["n"] == 1:
+                    raise ConnectionError("dropped")
+
+            return REAL_EXECUTE(self)
+
+        monkeypatch.setattr(FakeQuery, "execute", flaky)
+
+        incident = service.process_reading(
+            reading("co2", 1900.0)
+        )
+
+        assert incident is not None
+        assert attempts["n"] == 2
+
+    def test_persistent_failure_still_surfaces(
+        self, service, store, monkeypatch
+    ):
+        seed_occupancy(store, 40.0)
+
+        self._count_queries(store, monkeypatch)
+
+        def always_fail(self):
+            if self._name == "telemetry_readings":
+                raise ConnectionError("dropped")
+
+            return REAL_EXECUTE(self)
+
+        monkeypatch.setattr(
+            FakeQuery, "execute", always_fail
+        )
+
+        # Telemetry is never lost; the failure is counted, not
+        # raised into the flush.
         assert (
             service.process_batch(
                 [reading("co2", 1900.0)]
