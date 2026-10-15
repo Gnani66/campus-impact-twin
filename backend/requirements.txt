@@ -23,6 +23,9 @@ idna==3.20
 iniconfig==2.1.0
 multidict==6.7.1
 numpy==1.26.4
+# Video decoding for the Phase 7 vision service. The detector
+# itself needs no OpenCV; reading a video file does.
+opencv-python==4.11.0.86
 packaging==26.3
 paho-mqtt==2.1.0
 pluggy==1.6.0

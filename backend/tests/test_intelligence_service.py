@@ -947,3 +947,150 @@ class TestQueries:
         rows = service.list_incidents()
 
         assert rows[0]["impact_score"] == 99.0
+
+
+class TestOccupancyComparison:
+    """
+    Phase 7 STEP 14: a camera count and a sensor count for the
+    same zone, and what the gap between them means.
+
+    The two sources fail differently. A sensor counts heat, so
+    it counts an empty chair left warm and misses a person
+    standing still in a draught; a camera counts a visible
+    person and misses one behind a pillar. Neither is ground
+    truth, which is why this reports rather than picks a winner.
+    """
+
+    def _compare(self, iot, vision):
+        from app.services.intelligence_service import (
+            intelligence_service,
+        )
+
+        return intelligence_service.compare_occupancy_sources(
+            iot, vision
+        )
+
+    def test_identical_counts_are_consistent(self):
+        result = self._compare(42, 42)
+
+        assert result["verdict"] == "consistent"
+        assert result["consistent"] is True
+        assert result["difference"] == 0
+        assert result["higher_source"] is None
+
+    def test_small_gap_is_consistent(self):
+        """
+        The band is deliberately not zero-width. Two systems
+        counting one room by different means will rarely agree
+        exactly, and demanding it would make the check report a
+        permanent discrepancy.
+        """
+
+        result = self._compare(42, 46)
+
+        assert result["verdict"] == "consistent"
+        assert result["higher_source"] is None
+
+    def test_moderate_gap_is_minor(self):
+        result = self._compare(42, 50)
+
+        assert result["verdict"] == "minor_discrepancy"
+        assert result["consistent"] is False
+        assert result["higher_source"] == "vision"
+
+    def test_large_gap_is_significant(self):
+        result = self._compare(42, 60)
+
+        assert result["verdict"] == "significant_discrepancy"
+        assert result["absolute_difference"] == 18
+
+    def test_boundaries_are_exclusive(self):
+        """
+        The thresholds are strict comparisons, so a gap of
+        exactly 5 is already a discrepancy rather than a
+        rounding of one.
+        """
+
+        assert (
+            self._compare(42, 47)["verdict"]
+            == "minor_discrepancy"
+        )
+        assert (
+            self._compare(42, 52)["verdict"]
+            == "significant_discrepancy"
+        )
+
+    def test_direction_is_reported(self):
+        """
+        Which source is higher is the actionable part: a camera
+        above the sensor suggests under-reporting, below
+        suggests an obstructed view.
+        """
+
+        assert (
+            self._compare(42, 55)["higher_source"] == "vision"
+        )
+        assert (
+            self._compare(55, 42)["higher_source"] == "iot"
+        )
+
+    def test_agreement_falls_as_the_gap_widens(self):
+        exact = self._compare(50, 50)["agreement"]
+        close = self._compare(50, 55)["agreement"]
+        far = self._compare(50, 70)["agreement"]
+
+        assert exact == 1.0
+        assert exact > close > far
+
+    def test_agreement_is_relative_not_absolute(self):
+        """
+        The same absolute gap matters less in a larger room. A
+        four-person disagreement in a room of ten means nearly
+        half the occupants are unaccounted for; four out of two
+        hundred is noise. Scaling by the reading rather than a
+        fixed divisor is what distinguishes the two.
+        """
+
+        small = self._compare(10, 14)["agreement"]
+        large = self._compare(200, 204)["agreement"]
+
+        assert small < large
+        assert small == pytest.approx(1 - (4 / 14), abs=1e-4)
+        assert large == pytest.approx(1 - (4 / 204), abs=1e-4)
+
+    def test_empty_room_does_not_divide_by_zero(self):
+        result = self._compare(0, 12)
+
+        assert result["verdict"] == "significant_discrepancy"
+        assert result["agreement"] == 0.0
+
+    def test_both_empty_is_consistent(self):
+        result = self._compare(0, 0)
+
+        assert result["verdict"] == "consistent"
+        assert result["agreement"] == 1.0
+
+    def test_accepts_float_readings(self):
+        result = self._compare(42.4, 46.4)
+
+        assert result["verdict"] == "consistent"
+        assert result["difference"] == 4.0
+
+    def test_returns_no_sides(self):
+        """
+        A disagreement is a finding, not a failure. It reports
+        and lets the caller decide, rather than raising.
+        """
+
+        result = self._compare(42, 60)
+
+        assert set(result) == {
+            "verdict",
+            "iot_occupancy",
+            "vision_occupancy",
+            "difference",
+            "absolute_difference",
+            "agreement",
+            "higher_source",
+            "consistent",
+        }

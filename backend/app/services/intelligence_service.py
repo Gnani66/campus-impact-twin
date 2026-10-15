@@ -85,6 +85,17 @@ CONTEXT_RETRY_BACKOFF_SECONDS = 0.2
 OPEN_STATUSES = ("open", "acknowledged", "investigating")
 
 
+# Bands used by `compare_occupancy_sources`. Defined here
+# rather than imported from `vision.config` so the correlation
+# logic stays usable when the vision feature is switched off
+# entirely: comparing a camera count against a sensor count is
+# meaningful from recorded observations alone, and must not
+# depend on OpenCV or a model being present.
+CONSISTENCY_TOLERANCE = 5
+
+SIGNIFICANT_DISCREPANCY_THRESHOLD = 10
+
+
 @dataclass
 class ZoneContext:
     """
@@ -905,6 +916,90 @@ class IntelligenceService:
         )
 
         return updated[0]
+
+    # --- multi-source correlation --------------------------------
+
+    def compare_occupancy_sources(
+        self,
+        iot_occupancy: float,
+        vision_occupancy: float,
+    ) -> dict:
+        """
+        Compares a camera count against a sensor count for the
+        same zone.
+
+        The two are not interchangeable and neither is presumed
+        correct. An occupancy sensor reports a body heat
+        signature, so it counts a sleeping person and misses an
+        empty chair; a camera counts a visible person and misses
+        one behind a pillar. Persistent disagreement therefore
+        means a sensor has drifted, the camera view is
+        obstructed, or the zone is genuinely changing faster
+        than either source can follow.
+
+        Naming which reading disagrees, by how much, and with
+        what confidence is what makes that diagnosable. A bare
+        "they differ" would leave the reader to work out which
+        one to trust.
+
+        Returns a verdict dict. It reports rather than raises:
+        a disagreement is a finding, not a failure, and the
+        caller decides what to do about it.
+        """
+
+        iot = float(iot_occupancy)
+        vision = float(vision_occupancy)
+
+        difference = vision - iot
+        absolute = abs(difference)
+
+        if absolute < CONSISTENCY_TOLERANCE:
+            verdict = "consistent"
+        elif absolute < SIGNIFICANT_DISCREPANCY_THRESHOLD:
+            verdict = "minor_discrepancy"
+        else:
+            verdict = "significant_discrepancy"
+
+        # Agreement is scored relative to the larger of the two
+        # readings, so "they differ by 4" means the same thing
+        # whether the room holds 10 people or 200. Scaling by
+        # the larger value rather than a fixed divisor keeps the
+        # score meaningful as the building fills up.
+        scale = max(vision, iot, 1.0)
+
+        agreement = max(0.0, min(1.0, 1.0 - (absolute / scale)))
+
+        # Which source is higher is stated explicitly. A vision
+        # count above the sensor suggests under-reporting by the
+        # sensor; below suggests the camera is missing people.
+        # The two have different causes, so the direction is
+        # the actionable part.
+        if verdict == "consistent":
+            higher = None
+        elif vision > iot:
+            higher = "vision"
+        else:
+            higher = "iot"
+
+        logger.info(
+            "Occupancy comparison for zone: iot=%.1f vision=%.1f "
+            "difference=%+.1f verdict=%s",
+            iot,
+            vision,
+            difference,
+            verdict,
+        )
+
+        return {
+            "verdict": verdict,
+            "iot_occupancy": iot,
+            "vision_occupancy": vision,
+            "difference": round(difference, 2),
+            "absolute_difference": round(absolute, 2),
+            "agreement": round(agreement, 4),
+            "higher_source": higher,
+            "consistent": verdict == "consistent",
+        }
 
     # --- queries -------------------------------------------------
 

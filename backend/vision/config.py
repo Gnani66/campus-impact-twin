@@ -55,6 +55,53 @@ OBSERVATION_UNIT = "people"
 
 
 # ============================================================
+# TEMPORAL SMOOTHING
+# ============================================================
+
+# A single frame is not an occupancy. One missed detection reads
+# as a fall from 47 to 0 and one phantom box reads as a surge,
+# and either would move the reported count for a room that never
+# actually changed. Counts are therefore smoothed over a short
+# window before they are reported.
+#
+# Five frames is the default because it is long enough to absorb
+# one bad frame in either direction and short enough that a real
+# change in occupancy still shows up promptly.
+DEFAULT_SMOOTHING_WINDOW = 5
+
+# The window is summarised with a median rather than a mean. A
+# mean lets a single badly-wrong frame move the reported figure:
+# in [47, 45, 46, 46, 0] the mean is 36.8, which is worse than
+# either the truth or the outlier. The median is 46.
+#
+# A median of an even-sized window is the lower of the two
+# central values rather than their average, so the result is
+# always an observed count and never a fraction nobody counted.
+SMOOTHING_METHOD = "median"
+
+
+# ============================================================
+# SOURCE COMPARISON
+# ============================================================
+
+# Bands for disagreeing occupancy readings, measured as the
+# absolute difference between the camera count and the sensor
+# count for the same zone.
+#
+# The consistent band is not zero-width on purpose. Two systems
+# counting the same room by different means will rarely agree
+# exactly: a camera cannot see someone behind a pillar, and an
+# occupancy sensor counts a body heat signature rather than a
+# person. Demanding exact agreement would report a permanent
+# discrepancy and train everyone to ignore it.
+CONSISTENCY_TOLERANCE = 5
+
+# Above this the two sources are far enough apart that one of them
+# is probably wrong, which is the condition worth surfacing.
+SIGNIFICANT_DISCREPANCY_THRESHOLD = 10
+
+
+# ============================================================
 # UPLOAD LIMITS
 # ============================================================
 
