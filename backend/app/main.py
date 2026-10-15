@@ -8,7 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.campus import router as campus_router
 from app.api.correlation import router as correlation_router
+from app.api.impact import router as impact_router
 from app.api.incidents import router as incidents_router
+from app.api.interventions import (
+    router as interventions_router,
+)
+from app.api.simulation import router as simulation_router
 from app.core.config import settings
 from app.services.intelligence_service import (
     intelligence_service,
@@ -195,6 +200,14 @@ app.include_router(incidents_router)
 app.include_router(correlation_router)
 
 VISION_ROUTES_ENABLED = include_vision_router(app)
+
+# Phase 9 and 10. Neither router actuates anything: they model
+# and compare, and applying an intervention is a later,
+# human-approved step. Registered unconditionally so a client
+# can always ask what the system would do and be told.
+app.include_router(interventions_router)
+app.include_router(impact_router)
+app.include_router(simulation_router)
 
 
 def vision_health() -> dict:

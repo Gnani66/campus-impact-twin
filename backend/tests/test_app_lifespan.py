@@ -27,17 +27,24 @@ SENSOR_ID = "d1acf785-0000-4000-8000-00000000000a"
 ZONE_ID = "26f134ea-0000-4000-8000-000000000004"
 
 # Phase 5C Part 3 added the read-only telemetry route. Phase 8
-# added the two correlation routes. Every other route must be
-# exactly as it was, which is what makes this list useful: an
-# accidental addition or removal fails the test.
+# added the correlation routes. Phase 9 and 10 added the
+# intervention, impact and simulation routes. Every other route
+# must be exactly as it was, which is what makes this list
+# useful: an accidental addition or removal fails the test.
 BASELINE_ROUTES = [
     "/",
     "/api/v1/campus/{campus_code}/telemetry/latest",
     "/api/v1/campus/{campus_code}/twin",
     "/api/v1/correlation/analyze",
     "/api/v1/correlation/zone/{zone_code}",
+    "/api/v1/impact/analyze",
     "/api/v1/incidents",
     "/api/v1/incidents/summary",
+    "/api/v1/interventions",
+    "/api/v1/interventions/{code}",
+    "/api/v1/simulation/run",
+    "/api/v1/simulation/{run_id}",
+    "/api/v1/simulation/{run_id}/comparison",
     "/api/v1/vision/analyze",
     "/api/v1/vision/status",
     "/api/v1/vision/zone/{zone_code}/latest",
@@ -47,6 +54,27 @@ BASELINE_ROUTES = [
     "/openapi.json",
     "/redoc",
 ]
+
+
+def test_decision_engine_routes_are_registered():
+    """
+    Phase 9 and 10 routes are unconditional. A client must
+    always be able to ask what the system would do, and be told
+    whether that is safe.
+    """
+
+    from app.main import app as production
+
+    paths = {r.path for r in production.routes}
+
+    for expected in (
+        "/api/v1/interventions",
+        "/api/v1/impact/analyze",
+        "/api/v1/simulation/run",
+        "/api/v1/simulation/{run_id}",
+        "/api/v1/simulation/{run_id}/comparison",
+    ):
+        assert expected in paths
 
 
 def test_correlation_routes_are_not_gated_by_vision():
