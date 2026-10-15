@@ -18,6 +18,62 @@ from app.telemetry.lifecycle import TelemetryRuntime
 logger = logging.getLogger(__name__)
 
 
+def include_vision_router(application: FastAPI) -> bool:
+    """
+    Registers the Phase 7 vision routes, if they should be
+    served and can be defined.
+
+    Two independent conditions gate the feature:
+
+    * `VISION_ENABLED` — the operator's switch. When false the
+      router is never imported, so no vision endpoint exists to
+      run inference or touch the database. This is the kill
+      switch for the whole Phase 7 feature.
+    * `python-multipart` — FastAPI refuses to define a route
+      that takes a file upload without it, and raises while the
+      route is being declared rather than while it is called.
+      Importing the router eagerly would therefore stop the
+      whole API from starting.
+
+    A development checkout that has not installed the optional
+    vision extras should still serve the campus and incident
+    endpoints, so a missing dependency is logged and the rest
+    of the API comes up without the vision routes. The same
+    trade-off the lifespan already makes for a telemetry
+    outage: a degraded feature must not take the campus API
+    down with it.
+
+    Returns whether the routes were registered.
+    """
+
+    if not settings.vision_enabled:
+        logger.warning(
+            "Vision routes not registered: "
+            "VISION_ENABLED is false. The vision API is "
+            "disabled and will not run inference or write "
+            "observations."
+        )
+        return False
+
+    try:
+        from app.api.vision import (
+            router as vision_router,
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "Vision routes not registered: %s. Install "
+            "python-multipart to enable them.",
+            exc,
+        )
+        return False
+
+    application.include_router(vision_router)
+
+    logger.info("Vision routes registered")
+
+    return True
+
+
 def _intelligence_observer():
     """
     The intelligence engine, called with each batch of telemetry
@@ -129,6 +185,63 @@ app.add_middleware(
 
 app.include_router(campus_router)
 app.include_router(incidents_router)
+VISION_ROUTES_ENABLED = include_vision_router(app)
+
+
+def vision_health() -> dict:
+    """
+    Reports whether the vision API can actually be called.
+
+    A disabled feature, or a missing dependency, must never be
+    mistaken for a working vision engine, so the state is
+    published on `/health` rather than only logged at startup.
+
+    `enabled` is the operator's switch, `routes_registered`
+    is false when `/api/v1/vision/*` answers 404, and
+    `detector_available` is false when the model weights are
+    absent. All three being true is the only state in which
+    the vision API is usable.
+    """
+
+    report = {
+        "enabled": settings.vision_enabled,
+        "routes_registered": VISION_ROUTES_ENABLED,
+        "detector_available": False,
+    }
+
+    if not settings.vision_enabled:
+        report["detail"] = (
+            "Vision is disabled by VISION_ENABLED=false. No "
+            "vision route is registered, so no inference "
+            "runs and no observation is written."
+        )
+        return report
+
+    if not VISION_ROUTES_ENABLED:
+        report["detail"] = (
+            "Vision routes are not registered. Install the "
+            "backend requirements; POST /api/v1/vision/analyze "
+            "will return 404 until then."
+        )
+        return report
+
+    try:
+        from app.services.vision_service import (
+            vision_service,
+        )
+
+        report["detector_available"] = (
+            vision_service.is_available()
+        )
+        report["model_name"] = (
+            vision_service.detector.model_name
+        )
+    except Exception:
+        report["detail"] = (
+            "Vision service could not be inspected"
+        )
+
+    return report
 
 
 @app.get("/")
@@ -153,4 +266,5 @@ def health() -> dict:
             timezone.utc
         ).isoformat(),
         "intelligence": intelligence_service.stats,
+        "vision": vision_health(),
     }

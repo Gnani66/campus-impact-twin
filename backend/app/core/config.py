@@ -35,6 +35,28 @@ class Settings(BaseSettings):
     # It is off by default so the API starts unchanged.
     intelligence_enabled: bool = True
 
+    # Vision engine (Phase 7). An uploaded still image is
+    # analysed for people. This is not a live camera feed.
+    #
+    # `vision_enabled` lets a deployment serve the rest of the
+    # API without loading a detector at all.
+    vision_enabled: bool = True
+
+    # Detection thresholds. A detection below the confidence
+    # threshold is discarded, and overlapping boxes are merged
+    # with non-maximum suppression at the IoU threshold.
+    vision_confidence_threshold: float = 0.45
+    vision_iou_threshold: float = 0.50
+
+    # Uploads larger than this are rejected before the body is
+    # read into memory in full.
+    vision_max_upload_bytes: int = 10 * 1024 * 1024
+
+    # Path to the YOLO weights file. Left empty the detector
+    # looks for `yolo11n.pt` beside the vision package and
+    # refuses to download anything.
+    vision_model_path: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

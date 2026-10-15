@@ -42,6 +42,15 @@ build/
 *.blend
 frontend/public/models/
 
+# Vision engine (Phase 7): model weights and inference output.
+# Weights are large binaries and must be fetched separately;
+# the detector never downloads them at runtime.
+backend/vision/weights/
+*.pt
+*.onnx
+*.engine
+backend/vision/runs/
+
 # Stray files
 /database/h
 

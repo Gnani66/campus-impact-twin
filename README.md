@@ -42,17 +42,28 @@ role key.
 
 ## Database
 
-Migrations live in `backend/migrations/` and run in order in
-the Supabase SQL editor.
+Migrations live in `backend/migrations/` and **must be
+applied in order**, because each file depends on the ones
+before it. They are run by hand in the Supabase SQL editor;
+this repository has no migration runner.
 
 | File | Purpose |
 | --- | --- |
 | `001_smart_campus.sql` | Creates the schema, drops the superseded schema |
 | `002_seed_smart_campus.sql` | Seeds CIT-MAIN and the LH01 entity graph |
+| `003_vision_observations.sql` | Phase 7. Creates `vision_observations` with its two indexes and enables RLS |
 | `LEGACY_snapshot_do_not_run.sql` | Reference only. Pre-migration data snapshot |
 
+> **`003_vision_observations.sql` has not been applied to any
+> database.** It is written and reviewed but unapplied, so
+> `vision_observations` does not exist yet and no vision
+> observation has ever been persisted. It depends on `001`
+> (for the `pgcrypto` extension) and on `002` (for the seeded
+> zone graph), so it cannot be run first.
+
 Tables: `campuses`, `buildings`, `floors`, `zones`,
-`equipment`, `sensors`, `telemetry_readings`, `incidents`.
+`equipment`, `sensors`, `telemetry_readings`, `incidents`,
+and `vision_observations` (pending — see above).
 
 Seeded hierarchy:
 

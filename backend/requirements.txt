@@ -22,6 +22,7 @@ hyperframe==6.1.0
 idna==3.20
 iniconfig==2.1.0
 multidict==6.7.1
+numpy==1.26.4
 packaging==26.3
 paho-mqtt==2.1.0
 pluggy==1.6.0
@@ -33,10 +34,12 @@ pycparser==2.23
 pydantic==2.13.5
 pydantic-settings==2.11.0
 pydantic_core==2.46.5
+Pillow==11.1.0
 Pygments==2.21.0
 PyJWT==2.15.1
 pytest==8.4.2
 python-dotenv==1.2.1
+python-multipart==0.0.20
 PyYAML==6.0.3
 realtime==2.32.0
 requests==2.32.5
@@ -50,6 +53,7 @@ tenacity==9.1.2
 tomli==2.5.0
 typing-inspection==0.4.2
 typing_extensions==4.16.0
+ultralytics==8.3.0
 urllib3==2.6.3
 uvicorn==0.39.0
 uvloop==0.23.0
