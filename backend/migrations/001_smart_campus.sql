@@ -11,7 +11,8 @@
 -- NOTE: Step 0 removes the previous "Campus Impact Twin"
 -- schema, which was built around a different data model.
 -- A full data snapshot of those tables was taken beforehand
--- in database/legacy/campus_impact_twin_snapshot.sql
+-- in backend/migrations/LEGACY_snapshot_do_not_run.sql
+-- (reference only - do not execute it)
 -- ============================================================
 
 

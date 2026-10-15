@@ -346,9 +346,30 @@ Normal operation produces **zero incidents**, and that is the
 correct behaviour. An intelligence engine that reports `CRITICAL`
 every five seconds is not useful.
 
+## Phase 6 status
+
+Phase 6 is complete. The intelligence engine is implemented and
+wired into the telemetry flush cycle:
+
+| Rule | Signal |
+| --- | --- |
+| `temperature` | comfort band breach |
+| `humidity` | low / high bounds |
+| `co2` | ventilation adequacy |
+| `energy` | load multiplier against baseline |
+| `occupancy` | headcount over zone capacity |
+
+Endpoints: `GET /api/v1/incidents`, `GET /api/v1/incidents/summary`.
+Toggle with `INTELLIGENCE_ENABLED` (default on) and target a campus
+with `DEFAULT_CAMPUS_CODE`.
+
+Not yet built, and deliberately so: forecasting and
+recommendations. Those need a real history of sensor data
+accumulated over time rather than a scripted run.
+
 ## Next phase
 
-Phase 6 — intelligence on top of stored telemetry: anomaly
-detection, forecasting and recommendations. None of it exists
-yet, and none of it can be validated until the pipeline
-produces a meaningful history of real sensor data.
+Phase 7 — forecasting and recommendations on top of the stored
+incident and telemetry history. It depends on the pipeline having
+produced a meaningful history of real sensor data, so it cannot be
+validated against a short scripted run.
