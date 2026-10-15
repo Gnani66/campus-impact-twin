@@ -103,11 +103,16 @@ class SimulationOptionResponse(BaseModel):
 
     Infeasible options are returned with their reasons. What was
     rejected is part of the answer.
+
+    `id` is present only on an archived option, and is what a
+    caller passes to the Phase 11 approval endpoint.
     """
 
-    code: str
+    id: Optional[str] = None
 
-    name: str
+    code: Optional[str] = None
+
+    name: Optional[str] = None
 
     domain: Optional[str] = None
 
@@ -119,19 +124,25 @@ class SimulationOptionResponse(BaseModel):
 
     estimated_cost: float = 0.0
 
-    disruption_level: str
+    # The archive stores disruption_score, impact_score,
+    # confidence_score and overall_score. It does not store the
+    # disruption level, the feasibility score or the cost
+    # efficiency, so a re-read of an archived run reports those
+    # as absent rather than as zero. A zero would read as
+    # "scored nothing", which is a different and wrong claim.
+    disruption_level: Optional[str] = None
 
-    disruption_score: float
+    disruption_score: Optional[float] = None
 
-    impact_score: float
+    impact_score: Optional[float] = None
 
-    confidence_score: float
+    confidence_score: Optional[float] = None
 
-    feasibility_score: float
+    feasibility_score: Optional[float] = None
 
-    cost_efficiency_score: float
+    cost_efficiency_score: Optional[float] = None
 
-    overall_score: float
+    overall_score: Optional[float] = None
 
     projected_energy_reduction: Optional[float] = None
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.approvals import router as approvals_router
 from app.api.campus import router as campus_router
 from app.api.correlation import router as correlation_router
 from app.api.impact import router as impact_router
@@ -208,6 +209,11 @@ VISION_ROUTES_ENABLED = include_vision_router(app)
 app.include_router(interventions_router)
 app.include_router(impact_router)
 app.include_router(simulation_router)
+
+# Phase 11. The control boundary. Registered unconditionally so
+# a reviewer can always reach the queue; it authorises nothing by
+# itself, and execution is simulated.
+app.include_router(approvals_router)
 
 
 def vision_health() -> dict:

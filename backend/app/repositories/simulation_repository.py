@@ -187,9 +187,14 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
 
 def get_options(run_id: str) -> List[Dict[str, Any]]:
     """
-    The archived options for a run, joined to their intervention
-    so the codes and names are available without a second
-    query.
+    The archived options for a run, joined to their intervention.
+
+    The join is done here rather than as an embedded PostgREST
+    select. Embedding resolves the relationship through a
+    generated alias that does not exist on this schema, and the
+    failure is silent in the worst way: the options come back
+    empty and a run appears to have no findings at all. Two
+    explicit queries are slower and actually work.
     """
 
     try:
@@ -203,8 +208,7 @@ def get_options(run_id: str) -> List[Dict[str, Any]]:
                 "projected_waste_reduction,"
                 "projected_co2_reduction,disruption_score,"
                 "impact_score,confidence_score,overall_score,"
-                "assumptions,created_at,"
-                "interventions(code,name,disruption_level)"
+                "assumptions,created_at,intervention_id"
             )
             .eq("simulation_run_id", run_id)
             .order("overall_score", desc=True)
@@ -217,22 +221,76 @@ def get_options(run_id: str) -> List[Dict[str, Any]]:
 
         return []
 
-    rows = []
+    rows = result.data or []
 
-    for row in result.data or []:
-        # PostgREST returns the embedded relation as a list for
-        # a many-to-one join in some driver versions and a dict
-        # in others. Both shapes are handled rather than
-        # assuming one.
-        intervention = row.get("interventions")
+    if not rows:
+        return []
 
-        if isinstance(intervention, list):
-            intervention = intervention[0] if intervention else {}
+    interventions = _interventions_by_id(
+        [
+            row.get("intervention_id")
+            for row in rows
+            if row.get("intervention_id")
+        ]
+    )
 
-        row["intervention"] = (
-            intervention if isinstance(intervention, dict) else {}
+    for row in rows:
+        row["intervention"] = interventions.get(
+            str(row.get("intervention_id")), {}
         )
 
-        rows.append(row)
-
     return rows
+
+
+def _interventions_by_id(
+    intervention_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Fetches the interventions referenced by a set of options.
+
+    A missing intervention leaves its options present but
+    unnamed rather than dropping them: a comparison that hides
+    an option because its label is missing is worse than one
+    that shows it as unidentified.
+    """
+
+    unique = list({str(i) for i in intervention_ids if i})
+
+    if not unique:
+        return {}
+
+    try:
+        result = (
+            get_supabase()
+            .table("interventions")
+            .select("id,name,domain,cost,metadata")
+            .in_("id", unique)
+            .execute()
+        )
+    except Exception:
+        logger.exception(
+            "Failed to read interventions for options"
+        )
+
+        return {}
+
+    resolved = {}
+
+    for row in result.data or []:
+        metadata = (
+            row.get("metadata")
+            if isinstance(row.get("metadata"), dict)
+            else {}
+        )
+
+        resolved[str(row.get("id"))] = {
+            "code": metadata.get("code") or row.get("name"),
+            "name": row.get("name"),
+            "domain": row.get("domain"),
+            "cost": row.get("cost"),
+            "disruption_level": metadata.get(
+                "disruption_level"
+            ),
+        }
+
+    return resolved

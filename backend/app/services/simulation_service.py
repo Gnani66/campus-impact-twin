@@ -486,12 +486,41 @@ class SimulationService:
     def load(
         self, run_id: str
     ) -> Optional[Dict[str, Any]]:
-        """A stored run with its archived options."""
+        """
+        A stored run with its archived options.
+
+        Reconstructs the recommendation from the archive rather
+        than recomputing it. A past decision must be readable as
+        it was reached; recomputing could yield a different
+        winner today and quietly rewrite the history.
+        """
 
         run = get_run(run_id)
 
         if run is None:
             return None
+
+        options = get_options(run_id)
+
+        ranked = rank_options(
+            [
+                {
+                    **option,
+                    "code": (option.get("intervention") or {}).get(
+                        "code"
+                    ),
+                    "name": (option.get("intervention") or {}).get(
+                        "name"
+                    ),
+                    "disruption_level": (
+                        option.get("intervention") or {}
+                    ).get("disruption_level"),
+                }
+                for option in options
+            ]
+        )
+
+        recommendation = build_recommendation(ranked)
 
         return {
             "simulation_id": run.get("id"),
@@ -503,7 +532,40 @@ class SimulationService:
             "constraints": run.get("constraints") or {},
             "value_type": VALUE_SIMULATED,
             "created_at": run.get("created_at"),
-            "options": get_options(run_id),
+            # Rebuilt from the archive so the response always
+            # carries a recommendation object, even for a run
+            # that concluded nothing.
+            "recommendation": {
+                "intervention_code": (
+                    recommendation.intervention_code
+                ),
+                "overall_score": recommendation.overall_score,
+                "reason": recommendation.reason,
+                "status": recommendation.status,
+            },
+            # The archive stores the intervention as a nested
+            # object while a freshly computed option carries
+            # code and name at the top level. Hoisting them here
+            # keeps the two shapes interchangeable to a client.
+            "options": [
+                {
+                    **option,
+                    "code": (
+                        option.get("intervention") or {}
+                    ).get("code"),
+                    "name": (
+                        option.get("intervention") or {}
+                    ).get("name"),
+                    "domain": (
+                        option.get("intervention") or {}
+                    ).get("domain"),
+                    "disruption_level": (
+                        option.get("intervention") or {}
+                    ).get("disruption_level"),
+                }
+                for option in options
+            ],
+            "comparison": comparison_summary(ranked),
         }
 
 

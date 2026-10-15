@@ -27,12 +27,24 @@ SENSOR_ID = "d1acf785-0000-4000-8000-00000000000a"
 ZONE_ID = "26f134ea-0000-4000-8000-000000000004"
 
 # Phase 5C Part 3 added the read-only telemetry route. Phase 8
-# added the correlation routes. Phase 9 and 10 added the
-# intervention, impact and simulation routes. Every other route
-# must be exactly as it was, which is what makes this list
-# useful: an accidental addition or removal fails the test.
+# added the correlation routes, Phase 9 and 10 the intervention,
+# impact and simulation routes, and Phase 11 the approval
+# boundary. Every other route must be exactly as it was, which is
+# what makes this list useful: an accidental addition or removal
+# fails the test.
 BASELINE_ROUTES = [
     "/",
+    # POST creates an approval; GET lists them. Both live at the
+    # collection path, so it appears twice here exactly as it
+    # does in the route table.
+    "/api/v1/approvals",
+    "/api/v1/approvals",
+    "/api/v1/approvals/pending",
+    "/api/v1/approvals/{approval_id}",
+    "/api/v1/approvals/{approval_id}/events",
+    "/api/v1/approvals/{approval_id}/execute",
+    "/api/v1/approvals/{approval_id}/prepare",
+    "/api/v1/approvals/{approval_id}/review",
     "/api/v1/campus/{campus_code}/telemetry/latest",
     "/api/v1/campus/{campus_code}/twin",
     "/api/v1/correlation/analyze",
@@ -54,6 +66,29 @@ BASELINE_ROUTES = [
     "/openapi.json",
     "/redoc",
 ]
+
+
+def test_approval_routes_are_registered():
+    """
+    The approval boundary is unconditional. A reviewer must
+    always be able to reach the queue, and a client must always
+    be able to ask for an approval's history.
+    """
+
+    from app.main import app as production
+
+    paths = {r.path for r in production.routes}
+
+    for expected in (
+        "/api/v1/approvals",
+        "/api/v1/approvals/pending",
+        "/api/v1/approvals/{approval_id}",
+        "/api/v1/approvals/{approval_id}/review",
+        "/api/v1/approvals/{approval_id}/prepare",
+        "/api/v1/approvals/{approval_id}/execute",
+        "/api/v1/approvals/{approval_id}/events",
+    ):
+        assert expected in paths
 
 
 def test_decision_engine_routes_are_registered():
