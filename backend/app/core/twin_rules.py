@@ -359,3 +359,136 @@ def entity_id_for_code(code: str) -> str:
         return f"{letters.lower()}-{digits or '00'}"
 
     return f"zone-{digits or '00'}"
+
+# ============================================================
+# RECONCILING READINGS WITH INCIDENTS
+# ============================================================
+#
+# determine_status() grades readings. It cannot see an incident,
+# because an incident is a finding in the database and the rules
+# above take numbers. That is the right split - they are pure
+# functions of different facts - but it produced a screen that
+# contradicted itself:
+#
+#   status: normal        <- every reading inside its band
+#   active issues:        <- "Overheating in an occupied zone"
+#
+# Both statements were true and together they were misleading. A
+# zone with a confirmed energy anomaly is not normal, whatever its
+# thermometer says, and an operator shown "normal" beside a list of
+# critical incidents has to work out which one to believe.
+#
+# The reconciliation lives here, as a pure function, for the same
+# reason the thresholds do: it is a rule that should be argued with
+# in one place and tested without a database.
+
+# Ordered worst last. Unknown severities are treated as absent
+# rather than guessed at.
+INCIDENT_SEVERITY_ORDER = (
+    "low",
+    "medium",
+    "high",
+    "critical",
+)
+
+# An open incident at high or above means the zone is not fine,
+# even when every reading is inside its band. The distinction
+# matters: these are derived findings (energy against baseline, a
+# correlation gate) rather than a threshold crossing, so they will
+# never show up in determine_status().
+_INCIDENT_ESCALATION = {
+    "critical": STATUS_CRITICAL,
+    "high": STATUS_WARNING,
+}
+
+
+def reconcile_status_with_incidents(
+    status: str,
+    incidents: Optional[list] = None,
+) -> tuple:
+    """
+    Raises a zone's status to match its open incidents.
+
+    Returns the status and any reason worth showing. Never lowers a
+    status: offline stays offline, and a zone already graded
+    critical by its readings keeps that grade.
+
+    Offline is deliberately left alone even when critical incidents
+    are open. "Offline" means the numbers are unknown, and
+    overwriting that with "critical" would assert a measurement that
+    was never taken. The incidents are still returned to the caller
+    and still shown - the zone is unknown *and* troubled, and both
+    are true.
+    """
+
+    open_incidents = [
+        item
+        for item in (incidents or [])
+        if str(
+            (item or {}).get("status", "open")
+        ).lower()
+        not in ("resolved", "dismissed")
+    ]
+
+    if status == STATUS_OFFLINE or not open_incidents:
+        return status, []
+
+    worst = max(
+        (
+            str(item.get("severity", "")).lower()
+            for item in open_incidents
+        ),
+        key=lambda severity: (
+            INCIDENT_SEVERITY_ORDER.index(severity)
+            if severity in INCIDENT_SEVERITY_ORDER
+            else -1
+        ),
+        default="",
+    )
+
+    escalated = _INCIDENT_ESCALATION.get(worst)
+
+    if escalated is None:
+        return status, []
+
+    critical_count = sum(
+        1
+        for item in open_incidents
+        if str(item.get("severity", "")).lower()
+        == "critical"
+    )
+
+    count = len(open_incidents)
+
+    summary = (
+        f"{count} open incident{'s' if count != 1 else ''}"
+        + (
+            f", {critical_count} critical"
+            if critical_count
+            else ""
+        )
+    )
+
+    titles = [
+        str(item.get("title") or "").strip()
+        for item in open_incidents
+        if str(item.get("title") or "").strip()
+    ]
+
+    named = "; ".join(titles[:2])
+
+    if named and len(titles) > 2:
+        named = f"{named} and {len(titles) - 2} more"
+
+    reason = (
+        f"{summary} ({named}). The readings themselves are within "
+        "their limits, so this status comes from the incidents "
+        "rather than from a threshold crossing."
+    ).strip()
+
+    if status == STATUS_NORMAL:
+        return escalated, [reason]
+
+    # Already warning or critical on the readings. The incidents
+    # are additional context, not a change of grade.
+    return status, [reason]

@@ -22,6 +22,7 @@ never supplies the answer.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from app.ai import llm
@@ -717,18 +718,54 @@ async def process_message(
 
     caveats = list(snapshot.get("caveats") or [])
 
-    if generated is None:
+    # The status the backend actually assigned, which the prose is
+    # not allowed to disagree with.
+    verified_status = (
+        str((entity or {}).get("status") or "").lower()
+        if entity is not None
+        else None
+    )
+
+    answer = deterministic
+    source = "deterministic"
+
+    if generated is not None:
+        if contradicts_verified_status(
+            generated, verified_status
+        ):
+            # The model described a severity the record does not
+            # support. Its answer is dropped rather than corrected:
+            # editing a hallucination produces a sentence nobody
+            # verified, and the caveat below says plainly what
+            # happened.
+            caveats.append(
+                "The generated narrative described a status that "
+                "does not match the stored record, so it was "
+                "discarded and this answer was composed directly "
+                "from the readings."
+            )
+        else:
+            # The footer is appended to the model's prose rather
+            # than trusted in place of it, so the model still
+            # narrates and the record is still printed on the same
+            # screen.
+            answer = (
+                f"{generated.strip()}\n\n"
+                f"{_verified_footer(entity, snapshot)}"
+            )
+            source = "llm"
+    else:
         caveats.append(
             "The local language model was unavailable, so this "
             "answer was composed directly from stored readings."
         )
 
     return CopilotResponse(
-        answer=generated or deterministic,
+        answer=answer,
         intent=intent,
         evidence=evidence,
         recommendations=recommendations,
-        source="llm" if generated else "deterministic",
+        source=source,
         llm_available=generated is not None,
         entity_id=(entity or {}).get("id"),
         entity_name=(entity or {}).get("name"),
@@ -775,3 +812,147 @@ def _overview_evidence(
         evidence.extend(_entity_evidence(row))
 
     return evidence
+
+# ============================================================
+# KEEPING THE NARRATIVE HONEST
+# ============================================================
+#
+# The model writes prose. It does not decide anything: evidence
+# and recommendations are computed in Python and returned beside
+# its answer, and it never sees a path to either.
+#
+# What it can still do is narrate a severity the record does not
+# support - saying a zone is critical when the backend graded it
+# normal, or the reverse. The evidence array would contradict the
+# answer on the same screen, which is worse than no model at all:
+# it teaches the reader that one of the two is unreliable without
+# saying which.
+#
+# A prompt instruction not to do this is a request. Two structural
+# measures are not:
+#
+#   1. The answer carries a verified footer, composed here, naming
+#      the status the backend actually assigned. Even fluent
+#      output that contradicts the record is corrected by the
+#      record printed on top of it.
+#   2. If the prose names a severity that disagrees with that
+#      status, the prose is discarded and the deterministic answer
+#      is used instead, with a caveat saying so.
+
+_SEVERITY_WORDS = (
+    ("critical", "critical"),
+    ("offline", "offline"),
+    ("warning", "warning"),
+    ("normal", "normal"),
+)
+
+# The status a piece of prose is claiming, if any. Only the worst
+# word present counts, because prose says "not critical" as easily
+# as "critical" and reading that as a claim would misfire on every
+# cautious sentence.
+_PRIORITY = (
+    "critical",
+    "warning",
+    "offline",
+    "normal",
+)
+
+
+def claimed_severity(text: str) -> Optional[str]:
+    """
+    The severity a piece of prose asserts, or None if it asserts
+    none.
+
+    Deliberately blunt. This is not a natural-language parser and
+    does not try to be: it looks for the four status words the
+    product uses and takes the most severe one. False positives
+    cost a discarded paragraph, which is the cheap direction to
+    fail in - the deterministic answer is always available.
+    """
+
+    if not text:
+        return None
+
+    lowered = text.lower()
+
+    for word in _PRIORITY:
+        if re.search(rf"\b{word}\b", lowered):
+            return word
+
+    return None
+
+
+def contradicts_verified_status(
+    text: str,
+    verified_status: Optional[str],
+) -> bool:
+    """
+    Whether the prose disagrees with the stored status.
+
+    Silent when the status is unknown: an entity the snapshot
+    could not resolve has nothing to check against, and inventing
+    a contradiction there would replace a good answer with a worse
+    one.
+    """
+
+    if not verified_status:
+        return False
+
+    claimed = claimed_severity(text)
+
+    if claimed is None:
+        return False
+
+    return claimed != str(verified_status).lower()
+
+
+def _verified_footer(
+    entity: Optional[Dict[str, Any]],
+    snapshot: Dict[str, Any],
+) -> str:
+    """
+    The facts the backend decided, printed under the model's prose.
+
+    Short on purpose. This is an anchor, not a second answer: it
+    states what the record says so that a reader, and the person
+    presenting, can see at a glance whether the paragraph above it
+    agrees.
+    """
+
+    lines = ["", "---", "", "Verified by the backend:"]
+
+    if entity is not None:
+        status = str(entity.get("status") or "unknown").lower()
+
+        open_count = int(entity.get("open_incident_count") or 0)
+
+        lines.append(
+            f"- {entity.get('name')} is {status.upper()}"
+        )
+
+        if open_count:
+            lines.append(
+                f"- {open_count} open incident"
+                f"{'s' if open_count != 1 else ''} on this zone"
+            )
+
+        for reason in (entity.get("reasons") or [])[:3]:
+            lines.append(f"- {reason}")
+
+        return "\n".join(lines)
+
+    counts = snapshot.get("counts") or {}
+
+    total = sum(
+        int(value or 0) for value in counts.values()
+    )
+
+    lines.append(f"- {total} entities on the campus record")
+
+    for status in _PRIORITY:
+        count = counts.get(status)
+
+        if count:
+            lines.append(f"- {status}: {count}")
+
+    return "\n".join(lines)

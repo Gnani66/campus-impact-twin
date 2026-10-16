@@ -254,3 +254,58 @@ class ApprovalRepository:
             ApprovalEvent.from_row(row)
             for row in (result.data or [])
         ]
+    def list_events_for(
+        self,
+        approval_ids: List[str],
+    ) -> Dict[str, List[ApprovalEvent]]:
+        """
+        Histories for several requests in one query.
+
+        A listing that fetched events per row would issue a query
+        per request, and the audit view is exactly the page that
+        shows a queue rather than one item. One query, grouped by
+        request, keeps the listing proportional.
+
+        Returns a mapping with an empty list for any request that has
+        no events, so a caller never has to distinguish "no such
+        request" from "no history yet".
+        """
+
+        wanted = [str(item) for item in approval_ids if item]
+
+        grouped: Dict[str, List[ApprovalEvent]] = {
+            approval_id: [] for approval_id in wanted
+        }
+
+        if not wanted:
+            return grouped
+
+        try:
+            result = (
+                self._db()
+                .table(EVENTS_TABLE)
+                .select(
+                    "id,approval_request_id,previous_status,"
+                    "new_status,actor,reason,metadata,created_at"
+                )
+                .in_("approval_request_id", wanted)
+                .order("created_at")
+                .execute()
+            )
+        except Exception:
+            logger.exception(
+                "Failed to read events for %d approvals",
+                len(wanted),
+            )
+
+            return grouped
+
+        for row in result.data or []:
+            request_id = row.get("approval_request_id")
+
+            if request_id in grouped:
+                grouped[request_id].append(
+                    ApprovalEvent.from_row(row)
+                )
+
+        return grouped

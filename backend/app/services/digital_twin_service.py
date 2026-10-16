@@ -25,6 +25,7 @@ from app.core.twin_rules import (
     determine_status,
     entity_id_for_code,
     occupancy_ratio,
+    reconcile_status_with_incidents,
     status_reasons,
 )
 from app.repositories.digital_twin_repository import (
@@ -227,6 +228,19 @@ class DigitalTwinService:
         correlation = self.repository.latest_correlation(code)
 
         zone_incidents = incidents.get(zone_id, [])
+
+        # The status above came from readings alone, which cannot
+        # see an incident. Reconciled here, where both facts exist:
+        # a zone with an open critical incident must not present as
+        # normal beside a list of critical issues.
+        status, incident_reasons = (
+            reconcile_status_with_incidents(
+                status, zone_incidents
+            )
+        )
+
+        if incident_reasons:
+            reasons = list(reasons) + incident_reasons
 
         return TwinEntity(
             id=entity_id_for_code(code),

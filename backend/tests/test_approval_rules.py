@@ -357,6 +357,26 @@ class FakeRepository:
             if row["approval_request_id"] == approval_id
         ]
 
+    def list_events_for(self, approval_ids):
+        """
+        Grouped histories for several requests at once, matching
+        the real repository's one-query behaviour.
+        """
+
+        wanted = set(approval_ids)
+
+        grouped = {item: [] for item in wanted}
+
+        for row in self.events:
+            request_id = row["approval_request_id"]
+
+            if request_id in grouped:
+                grouped[request_id].append(
+                    ApprovalEvent.from_row(row)
+                )
+
+        return grouped
+
     def list_by_status(self, status, limit=50):
         return [
             ApprovalRequest.from_row(row)

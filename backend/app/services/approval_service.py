@@ -213,18 +213,62 @@ class ApprovalService:
         This is what a dashboard's "needs approval" panel reads,
         and it is the only listing that represents unfinished
         business.
+
+        Events are attached here, not only on the single-request
+        path. The whole point of an approval queue is that each
+        item is auditable at a glance; a list whose items carry an
+        empty history makes the reviewer click through to
+        `/approvals/{id}` to discover that something already
+        happened to it.
         """
 
-        return self.repository.list_by_status(
+        requests = self.repository.list_by_status(
             STATUS_PENDING, limit=limit
         )
+
+        return self._attach_events(requests)
 
     def all_requests(
         self, limit: int = 50
     ) -> List[ApprovalRequest]:
-        """Every request, newest first, for the audit view."""
+        """
+        Every request, newest first, for the audit view.
 
-        return self.repository.list_all(limit=limit)
+        Carries the same histories as the queue: this listing is
+        read to check what was done, and an audit trail that is
+        empty in the view and full in the detail is not much of an
+        audit trail.
+        """
+
+        requests = self.repository.list_all(limit=limit)
+
+        return self._attach_events(requests)
+
+    def _attach_events(
+        self,
+        requests: List[ApprovalRequest],
+    ) -> List[ApprovalRequest]:
+        """
+        Fills in each request's history from a single query.
+
+        A failure here must not lose the queue. The requests are
+        returned with empty histories and the reason logged, because
+        a list of requests without their history is still useful and
+        a raised exception would take the approval workflow down
+        with an unrelated read.
+        """
+
+        if not requests:
+            return requests
+
+        histories = self.repository.list_events_for(
+            [request.id for request in requests if request.id]
+        )
+
+        for request in requests:
+            request.events = histories.get(request.id, [])
+
+        return requests
 
     # ------------------------------------------------------
     # Review
