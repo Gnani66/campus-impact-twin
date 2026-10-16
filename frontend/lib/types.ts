@@ -83,6 +83,16 @@ export interface Sensor {
   updated_at: string;
 }
 
+/**
+ * A campus incident.
+ *
+ * Two endpoints return this, with slightly different coverage.
+ * `/campus/{code}/twin` includes the audit timestamps it stored;
+ * `/incidents` resolves the zone code, which is what makes a list
+ * of incidents readable. Fields that only one of them returns are
+ * optional rather than duplicated into a second type, because
+ * callers use both for the same purpose: showing a problem.
+ */
 export interface Incident {
   id: string;
   campus_id: string;
@@ -102,8 +112,81 @@ export interface Incident {
   detected_at: string;
   acknowledged_at: string | null;
   resolved_at: string | null;
-  created_at: string;
-  updated_at: string;
+  /** Resolved by `/incidents`; absent from the twin snapshot. */
+  zone_code?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Aggregate incident counts for one campus. */
+export interface IncidentSummary {
+  campus_code: string;
+  total_incidents: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  open_incidents: number;
+  highest_impact: number;
+}
+
+/**
+ * One entry in an approval's history.
+ *
+ * Events are append-only: they are the record of who decided what,
+ * and when.
+ */
+export interface ApprovalEvent {
+  id: string | null;
+  previous_status: string | null;
+  new_status: string;
+  actor: string;
+  reason: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+}
+
+/**
+ * A recommendation put to a human.
+ *
+ * Nothing here acts on the campus. A request moves
+ * pending -> approved -> ready_to_execute -> executed, each step a
+ * separate decision recorded separately, and every status here is
+ * decided by a person.
+ */
+export interface ApprovalRequest {
+  id: string | null;
+  request_code: string;
+  simulation_id: string;
+  simulation_option_id: string;
+  title: string;
+  status: string;
+  description: string | null;
+  requested_by: string;
+  requested_at: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  review_reason: string | null;
+  execution_started_at: string | null;
+  execution_completed_at: string | null;
+  execution_result: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+  updated_at: string | null;
+  events: ApprovalEvent[];
+}
+
+/** The outcome of a review: the new state and the record of it. */
+export interface ApprovalReviewResult {
+  approval: ApprovalRequest;
+  event: ApprovalEvent;
+}
+
+/** The outcome of a simulated execution. */
+export interface ApprovalExecutionResult {
+  approval: ApprovalRequest;
+  event: ApprovalEvent | null;
+  execution_result: Record<string, unknown>;
 }
 
 export interface TelemetryReading {

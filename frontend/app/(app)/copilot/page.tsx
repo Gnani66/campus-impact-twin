@@ -17,17 +17,16 @@ export default function CopilotPage({
   searchParams,
 }: PageProps<"/copilot">) {
   return (
-    <main className="flex h-screen flex-col bg-slate-100 p-6">
-      <div className="mb-4">
-        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-          Smart Campus
-        </p>
-
-        <h1 className="mt-1 text-2xl font-semibold text-slate-900">
+    // `100vh - 3.5rem` is the viewport minus the sticky shell
+    // header. `h-screen` here would push a scrollbar onto the page
+    // and cut the conversation off at the bottom.
+    <main className="flex h-[calc(100vh-3.5rem)] flex-col">
+      <div className="mx-auto w-full max-w-7xl px-1 pt-6">
+        <h2 className="text-2xl font-semibold tracking-tight">
           AI Operations Copilot
-        </h1>
+        </h2>
 
-        <p className="mt-1 max-w-3xl text-sm text-slate-600">
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
           Ask what needs attention, why a zone holds its status, or
           what might be done about it. The backend reads stored
           sensor readings and decides; the local model only explains
@@ -35,7 +34,7 @@ export default function CopilotPage({
         </p>
       </div>
 
-      <div className="min-h-0 flex-1">
+      <div className="mx-auto min-h-0 w-full max-w-7xl flex-1 px-1 pt-4">
         <Suspense fallback={<CopilotFrame />}>
           <CopilotScope searchParams={searchParams} />
         </Suspense>

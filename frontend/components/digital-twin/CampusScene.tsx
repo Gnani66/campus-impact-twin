@@ -4,7 +4,12 @@ import { Suspense, useCallback } from "react";
 
 import { Canvas } from "@react-three/fiber";
 
-import { ContactShadows, Environment, OrbitControls } from "@react-three/drei";
+import {
+  Bounds,
+  ContactShadows,
+  Environment,
+  OrbitControls,
+} from "@react-three/drei";
 
 import { EntityMarker } from "./EntityMarker";
 import { LectureHall } from "./LectureHall";
@@ -18,6 +23,15 @@ interface CampusSceneProps {
   entities: TwinEntity[];
   selectedId: string | null;
   onSelect: (entity: TwinEntity | null) => void;
+
+  /**
+   * Surface behind the model.
+   *
+   * Set by the caller so the same scene can sit on a dark page or
+   * inside a light dashboard card. Left to this component it would
+   * be a decision made in the wrong place.
+   */
+  className?: string;
 }
 
 /**
@@ -38,6 +52,7 @@ export function CampusScene({
   entities,
   selectedId,
   onSelect,
+  className,
 }: CampusSceneProps) {
   const visible = entities.filter(isVisible);
 
@@ -48,7 +63,12 @@ export function CampusScene({
   }, [onSelect]);
 
   return (
-    <div className="h-full w-full overflow-hidden rounded-2xl bg-slate-950">
+    <div
+      className={
+        className ??
+        "h-full w-full overflow-hidden rounded-2xl bg-slate-950"
+      }
+    >
       {/* "percentage" is PCFShadowMap. The bare `shadows`
           shorthand resolves to PCFSoftShadowMap, which three 0.186
           removed from the renderer: it warned and fell back to this
@@ -67,23 +87,41 @@ export function CampusScene({
 
         <Environment preset="city" background={false} />
 
-        <Suspense fallback={null}>
-          <LectureHall />
+        {/*
+          The camera is fitted to the model rather than pointed at
+          hardcoded coordinates.
 
-          {visible.map((entity) => {
-            const placement = getPlacement(entity);
+          A GLB's origin, scale and extent are arbitrary, so a
+          fixed position frames this asset correctly and the next
+          one wrongly. `Bounds` measures the loaded geometry and
+          frames it with a margin, which is also what keeps the
+          model whole in a dashboard panel that is a different
+          aspect ratio from the full-screen twin.
+        */}
+        <Bounds
+          fit
+          clip
+          observe
+          margin={1.3}
+        >
+          <Suspense fallback={null}>
+            <LectureHall />
 
-            return (
-              <EntityMarker
-                key={entity.id}
-                entity={entity}
-                position={placement.position}
-                selected={entity.id === selectedId}
-                onSelect={onSelect}
-              />
-            );
-          })}
-        </Suspense>
+            {visible.map((entity) => {
+              const placement = getPlacement(entity);
+
+              return (
+                <EntityMarker
+                  key={entity.id}
+                  entity={entity}
+                  position={placement.position}
+                  selected={entity.id === selectedId}
+                  onSelect={onSelect}
+                />
+              );
+            })}
+          </Suspense>
+        </Bounds>
 
         <ContactShadows
           position={[0, -0.05, 0]}

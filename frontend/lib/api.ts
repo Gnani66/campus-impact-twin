@@ -133,12 +133,16 @@ export interface CampusTwinData {
 
 export async function getCampusTwin(
   campusCode = "CIT-MAIN",
+  signal?: AbortSignal,
 ): Promise<CampusTwinData> {
   const label = "Campus Twin API";
 
   const response = await apiFetch(
     `${API_URL}/api/v1/campus/${campusCode}/twin`,
-    { cache: "no-store" },
+    {
+      cache: "no-store",
+      signal,
+    },
     label,
   );
 
@@ -452,3 +456,280 @@ async function askCopilot(
 export type { CopilotEvidence, CopilotRecommendation };
 
 export { askCopilot };
+
+// ============================================================
+// INCIDENTS AND APPROVALS
+// ============================================================
+//
+// The two pages that let a person work through what the twin has
+// found: the incidents themselves, and the requests waiting on a
+// decision.
+//
+// The approval calls are the only writes in this module, and they
+// write to a decision record, not to anything on the campus. A
+// request can only be approved, rejected, prepared or executed by
+// naming a person, and the backend records each as its own
+// auditable step.
+
+import type {
+  ApprovalExecutionResult,
+  ApprovalRequest,
+  ApprovalReviewResult,
+  IncidentSummary,
+} from "@/lib/types";
+
+function isApprovalRequest(
+  value: unknown,
+): value is ApprovalRequest {
+  return (
+    isRecord(value) &&
+    typeof value.request_code === "string" &&
+    typeof value.title === "string" &&
+    typeof value.status === "string" &&
+    Array.isArray(value.events)
+  );
+}
+
+export interface IncidentListOptions {
+  status?: string | null;
+  severity?: string | null;
+  category?: string | null;
+  /** Zone code, for example LH01. */
+  zone?: string | null;
+  limit?: number;
+}
+
+/**
+ * Lists incidents, most severe first.
+ *
+ * Filters are applied by the backend, not here: fetching a page and
+ * narrowing it in the browser would silently under-report once the
+ * result reached the limit.
+ */
+export async function getIncidents(
+  options: IncidentListOptions = {},
+  signal?: AbortSignal,
+): Promise<Incident[]> {
+  const params = new URLSearchParams();
+
+  if (options.status) {
+    params.set("status", options.status);
+  }
+
+  if (options.severity) {
+    params.set("severity", options.severity);
+  }
+
+  if (options.category) {
+    params.set("category", options.category);
+  }
+
+  if (options.zone) {
+    params.set("zone", options.zone);
+  }
+
+  if (typeof options.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+
+  const query = params.toString();
+  const label = "Incidents API";
+
+  const response = await apiFetch(
+    `${API_URL}/api/v1/incidents${query ? `?${query}` : ""}`,
+    { cache: "no-store", signal },
+    label,
+  );
+
+  ensureOk(response, label);
+
+  const body = await readJson(response, label);
+
+  if (!Array.isArray(body)) {
+    throw new Error(
+      `${label} returned an unexpected response shape.`,
+    );
+  }
+
+  // A row without an id cannot be keyed or acted on, so it is
+  // dropped rather than rendered as a broken card.
+  return body.filter(
+    (item) =>
+      isRecord(item) && typeof item.id === "string",
+  ) as Incident[];
+}
+
+export async function getIncidentSummary(
+  campusCode = "CIT-MAIN",
+  signal?: AbortSignal,
+): Promise<IncidentSummary> {
+  const label = "Incidents API";
+
+  const response = await apiFetch(
+    `${API_URL}/api/v1/incidents/summary?campus_code=${encodeURIComponent(campusCode)}`,
+    { cache: "no-store", signal },
+    label,
+  );
+
+  ensureOk(response, label);
+
+  const body = await readJson(response, label);
+
+  if (
+    !isRecord(body) ||
+    typeof body.total_incidents !== "number" ||
+    typeof body.open_incidents !== "number"
+  ) {
+    throw new Error(
+      `${label} returned an unexpected response shape.`,
+    );
+  }
+
+  return body as unknown as IncidentSummary;
+}
+
+export async function getApprovalRequests(
+  signal?: AbortSignal,
+): Promise<ApprovalRequest[]> {
+  const label = "Approvals API";
+
+  const response = await apiFetch(
+    `${API_URL}/api/v1/approvals`,
+    { cache: "no-store", signal },
+    label,
+  );
+
+  ensureOk(response, label);
+
+  const body = await readJson(response, label);
+
+  if (!Array.isArray(body)) {
+    throw new Error(
+      `${label} returned an unexpected response shape.`,
+    );
+  }
+
+  return body.filter(isApprovalRequest);
+}
+
+/**
+ * Records a human decision on a request.
+ *
+ * A reviewer is required by the backend, and a reason is required
+ * for anything that closes the request, so both are collected
+ * before this is called rather than being left blank.
+ */
+export async function reviewApproval(
+  approvalId: string,
+  review: {
+    status: "approved" | "rejected";
+    reviewer: string;
+    reason?: string | null;
+  },
+  signal?: AbortSignal,
+): Promise<ApprovalReviewResult> {
+  const label = "The approval review";
+
+  const response = await apiFetch(
+    `${API_URL}/api/v1/approvals/${encodeURIComponent(approvalId)}/review`,
+    {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(review),
+      signal,
+    },
+    label,
+  );
+
+  ensureOk(response, label);
+
+  const body = await readJson(response, label);
+
+  if (
+    !isRecord(body) ||
+    !isApprovalRequest(body.approval)
+  ) {
+    throw new Error(
+      `${label} returned an unexpected response shape.`,
+    );
+  }
+
+  return body as unknown as ApprovalReviewResult;
+}
+
+/**
+ * Moves an approved request to ready for execution.
+ *
+ * A separate step from approving, on purpose: agreeing to an action
+ * and scheduling it are different decisions.
+ */
+export async function prepareApproval(
+  approvalId: string,
+  actor: string,
+  signal?: AbortSignal,
+): Promise<ApprovalRequest> {
+  const label = "The approval preparation";
+
+  const response = await apiFetch(
+    `${API_URL}/api/v1/approvals/${encodeURIComponent(approvalId)}/prepare?actor=${encodeURIComponent(actor)}`,
+    { method: "POST", cache: "no-store", signal },
+    label,
+  );
+
+  ensureOk(response, label);
+
+  const body = await readJson(response, label);
+
+  if (!isApprovalRequest(body)) {
+    throw new Error(
+      `${label} returned an unexpected response shape.`,
+    );
+  }
+
+  return body;
+}
+
+/**
+ * Records a simulated execution.
+ *
+ * Simulation only. Nothing in this project can reach a physical
+ * campus system, so this writes a record of what would have
+ * happened and nothing else.
+ */
+export async function executeApproval(
+  approvalId: string,
+  actor: string,
+  signal?: AbortSignal,
+): Promise<ApprovalExecutionResult> {
+  const label = "The simulated execution";
+
+  const response = await apiFetch(
+    `${API_URL}/api/v1/approvals/${encodeURIComponent(approvalId)}/execute?actor=${encodeURIComponent(actor)}`,
+    { method: "POST", cache: "no-store", signal },
+    label,
+  );
+
+  ensureOk(response, label);
+
+  const body = await readJson(response, label);
+
+  if (
+    !isRecord(body) ||
+    !isApprovalRequest(body.approval)
+  ) {
+    throw new Error(
+      `${label} returned an unexpected response shape.`,
+    );
+  }
+
+  return body as unknown as ApprovalExecutionResult;
+}
+
+export type {
+  ApprovalExecutionResult,
+  ApprovalRequest,
+  ApprovalReviewResult,
+  Incident,
+  IncidentSummary,
+};

@@ -28,25 +28,20 @@ const DigitalTwin = dynamic(
 
 export default function DigitalTwinPage() {
   return (
-    <main className="flex h-screen flex-col bg-slate-100 p-6">
-      <div className="mb-4 flex items-end justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-            Smart Campus
-          </p>
+    <main className="flex h-[calc(100vh-3.5rem)] flex-col">
+      <div className="mx-auto w-full max-w-7xl px-1 pt-6">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Digital Twin
+        </h2>
 
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Digital Twin
-          </h1>
-
-          <p className="mt-1 text-sm text-slate-600">
-            Live visual representation of campus operations. Status is
-            determined on the backend from stored sensor readings.
-          </p>
-        </div>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+          Live visual representation of campus operations. Status
+          is determined on the backend from stored sensor readings,
+          so the model and the incident record cannot disagree.
+        </p>
       </div>
 
-      <div className="min-h-0 flex-1">
+      <div className="mx-auto min-h-0 w-full max-w-7xl flex-1 px-1 pt-4">
         <DigitalTwin />
       </div>
     </main>
