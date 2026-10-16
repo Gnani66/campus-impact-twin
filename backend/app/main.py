@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.approvals import router as approvals_router
 from app.api.campus import router as campus_router
 from app.api.correlation import router as correlation_router
+from app.api.digital_twin import router as digital_twin_router
 from app.api.impact import router as impact_router
 from app.api.incidents import router as incidents_router
 from app.api.interventions import (
@@ -180,10 +181,17 @@ app = FastAPI(
     lifespan=create_lifespan(),
 )
 
+# Both loopback spellings are allowed because they are different
+# origins to a browser, and developers reach the frontend as one
+# or the other without noticing. A fetch from 127.0.0.1 to a
+# backend that allows only localhost is blocked by CORS even
+# though both are the same machine, which produces a "failed to
+# fetch" that looks like the API being down.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -214,6 +222,11 @@ app.include_router(simulation_router)
 # a reviewer can always reach the queue; it authorises nothing by
 # itself, and execution is simulated.
 app.include_router(approvals_router)
+
+# Phase 12. The digital twin's view of the campus. Registered
+# unconditionally and read-only: it reports state and cannot
+# change any.
+app.include_router(digital_twin_router)
 
 
 def vision_health() -> dict:

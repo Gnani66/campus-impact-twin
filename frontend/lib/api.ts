@@ -176,3 +176,147 @@ export async function getLatestTelemetry(
     readings,
   };
 }
+
+// ============================================================
+// DIGITAL TWIN (Phase 12)
+// ============================================================
+//
+// Added to this module rather than replacing it, so the campus
+// and telemetry fetchers already here keep working.
+//
+// The twin is treated as untrusted input and validated rather
+// than cast: a malformed snapshot that reached a 3D scene would
+// surface as an unexplained undefined at render time, deep in
+// Three.js, which is a miserable thing to debug. Checking the
+// shape here turns that into a clear message at the boundary.
+
+import type {
+  TwinEntity,
+  TwinSnapshotWire,
+} from "@/lib/twin-state";
+
+/** Poll interval for the twin snapshot, in milliseconds. */
+export const TWIN_POLL_INTERVAL_MS = 5000;
+
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" && value !== null
+  );
+}
+
+/**
+ * Checks the snapshot has the shape the twin components need.
+ *
+ * Deliberately shallow: it verifies the envelope and the fields
+ * every component reads unconditionally, and lets the typed
+ * metrics through. Deep validation of eleven numeric fields on
+ * every poll would cost more than it catches.
+ */
+function isTwinSnapshot(
+  value: unknown,
+): value is TwinSnapshotWire {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    typeof value.timestamp !== "string" ||
+    !Array.isArray(value.entities)
+  ) {
+    return false;
+  }
+
+  return value.entities.every(
+    (entity) =>
+      isRecord(entity) &&
+      typeof entity.id === "string" &&
+      typeof entity.name === "string" &&
+      typeof entity.status === "string" &&
+      isRecord(entity.metrics),
+  );
+}
+
+export async function getDigitalTwinSnapshot(
+  signal?: AbortSignal,
+): Promise<TwinSnapshotWire> {
+  const response = await fetch(
+    `${API_URL}/api/v1/digital-twin/snapshot`,
+    {
+      cache: "no-store",
+      signal,
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Digital Twin API failed: ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response
+    .json()
+    .catch(() => {
+      throw new Error(
+        "Digital Twin API returned a malformed response.",
+      );
+    });
+
+  if (!isTwinSnapshot(body)) {
+    throw new Error(
+      "Digital Twin API returned an unexpected response shape.",
+    );
+  }
+
+  return body;
+}
+
+export async function getDigitalTwinEntity(
+  entityId: string,
+  signal?: AbortSignal,
+): Promise<TwinEntity> {
+  const response = await fetch(
+    `${API_URL}/api/v1/digital-twin/entities/${encodeURIComponent(
+      entityId,
+    )}`,
+    {
+      cache: "no-store",
+      signal,
+    },
+  );
+
+  if (response.status === 404) {
+    throw new Error(
+      `No campus entity matching '${entityId}'.`,
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Digital Twin API failed: ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response
+    .json()
+    .catch(() => {
+      throw new Error(
+        "Digital Twin API returned a malformed response.",
+      );
+    });
+
+  if (
+    !isRecord(body) ||
+    typeof body.id !== "string" ||
+    !isRecord(body.metrics)
+  ) {
+    throw new Error(
+      "Digital Twin API returned an unexpected entity shape.",
+    );
+  }
+
+  // The wire shape is camel-cased here so callers receive the
+  // same type the snapshot endpoint produces after conversion.
+  return body as unknown as TwinEntity;
+}

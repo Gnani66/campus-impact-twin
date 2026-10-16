@@ -49,6 +49,8 @@ BASELINE_ROUTES = [
     "/api/v1/campus/{campus_code}/twin",
     "/api/v1/correlation/analyze",
     "/api/v1/correlation/zone/{zone_code}",
+    "/api/v1/digital-twin/entities/{entity_id}",
+    "/api/v1/digital-twin/snapshot",
     "/api/v1/impact/analyze",
     "/api/v1/incidents",
     "/api/v1/incidents/summary",
@@ -66,6 +68,20 @@ BASELINE_ROUTES = [
     "/openapi.json",
     "/redoc",
 ]
+
+
+def test_digital_twin_routes_are_registered():
+    """
+    The twin's view of the campus is unconditional and
+    read-only: it reports state and cannot change any.
+    """
+
+    from app.main import app as production
+
+    paths = {r.path for r in production.routes}
+
+    assert "/api/v1/digital-twin/snapshot" in paths
+    assert "/api/v1/digital-twin/entities/{entity_id}" in paths
 
 
 def test_approval_routes_are_registered():
