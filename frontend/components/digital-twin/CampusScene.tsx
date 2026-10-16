@@ -88,22 +88,27 @@ export function CampusScene({
         <Environment preset="city" background={false} />
 
         {/*
-          The camera is fitted to the model rather than pointed at
-          hardcoded coordinates.
+          The camera is fitted to the model once it has loaded,
+          rather than pointed at hardcoded coordinates.
 
           A GLB's origin, scale and extent are arbitrary, so a
           fixed position frames this asset correctly and the next
-          one wrongly. `Bounds` measures the loaded geometry and
+          one wrongly. `fit` measures the loaded geometry and
           frames it with a margin, which is also what keeps the
-          model whole in a dashboard panel that is a different
-          aspect ratio from the full-screen twin.
+          model whole in a dashboard panel whose aspect ratio
+          differs from the full-screen twin.
+
+          Deliberately no `observe`: that re-fits every time the
+          scene changes, and the scene changes on every poll, so
+          the camera was snapping back to its fitted position while
+          the operator tried to zoom. No `clip` either - it
+          rewrites the near and far planes to the content bounds,
+          which is not worth the risk on a 272 MB asset.
+
+          Once framed, the camera belongs to the operator: they can
+          zoom to the limits the OrbitControls below allow.
         */}
-        <Bounds
-          fit
-          clip
-          observe
-          margin={1.3}
-        >
+        <Bounds fit margin={1.3}>
           <Suspense fallback={null}>
             <LectureHall />
 
