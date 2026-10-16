@@ -248,14 +248,14 @@ export default function NexdashSmartCampus() {
 
       </main>
 
-      {/* FOOTER — huge SMART CAMPUS like NEXDASH */}
+{/* FOOTER — huge SMART CAMPUS like NEXDASH */}
       <div className="w-full pb-5 lg:pb-[29px]">
         <div className="relative overflow-hidden bg-[#041C15] text-white lg:h-[340px]">
           <div className="px-5 md:px-7 lg:px-[max(34px,2.361vw)] flex flex-col gap-10 pb-10 pt-12 md:pb-14 md:pt-16 lg:grid lg:h-full lg:grid-cols-[auto_auto] lg:items-start lg:justify-between lg:pb-[46px] lg:pt-[56px]">
             <span className="nd-display block text-[17vw] font-bold leading-[0.8] tracking-[-0.045em] lg:text-[clamp(72px,9.2vw,132px)]">SMART CAMPUS</span>
             <div className="grid grid-cols-2 gap-x-10 gap-y-10 sm:grid-cols-2 lg:gap-x-[74px]">
               <div className="flex flex-col gap-4"><span className="nd-small text-white/60">Company</span><Link href="/dashboard" className="nd-label text-white hover:opacity-70">Live Dashboard</Link><a href="#overview" className="nd-label text-white hover:opacity-70">Overview</a></div>
-              <div className="flex flex-col gap-4"><span className="nd-small text-white/60">Platform</span><Link href="/dashboard" className="nd-label text-white hover:opacity-70">SCEMS</Link><a href="#platform" className="nd-label text-white hover:opacity-70">How it works</a></div>
+              <div className="flex flex-col gap-4"><span className="nd-small text-white/60">Platform</span><Link href="/dashboard" className="nd-label text-white hover:opacity-70">SCEMS</Link><a href="#platform" className="nd-label text-white hover:opacity-70">How it works</a><Link href="/copilot" className="nd-label text-white hover:opacity-70">AI operations copilot</Link></div>
             </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:col-span-2 nd-small text-white/60 border-t border-white/10 pt-6 mt-2">
               <span>© 2026 SCEMS. All rights reserved.</span>
@@ -263,7 +263,7 @@ export default function NexdashSmartCampus() {
             </div>
           </div>
         </div>
-      </div>
+</div>
     </div>
   );
 }

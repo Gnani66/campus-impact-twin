@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.approvals import router as approvals_router
 from app.api.campus import router as campus_router
+from app.api.copilot import router as copilot_router
 from app.api.correlation import router as correlation_router
 from app.api.digital_twin import router as digital_twin_router
 from app.api.impact import router as impact_router
@@ -227,6 +228,12 @@ app.include_router(approvals_router)
 # unconditionally and read-only: it reports state and cannot
 # change any.
 app.include_router(digital_twin_router)
+
+# Phase 13. The copilot is read-only by construction: it returns
+# prose plus deterministically computed evidence, and has no path
+# to a database write or to equipment. Registered unconditionally
+# so an operator can always ask a question.
+app.include_router(copilot_router, prefix="/api/v1")
 
 
 def vision_health() -> dict:

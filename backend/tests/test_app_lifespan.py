@@ -47,6 +47,8 @@ BASELINE_ROUTES = [
     "/api/v1/approvals/{approval_id}/review",
     "/api/v1/campus/{campus_code}/telemetry/latest",
     "/api/v1/campus/{campus_code}/twin",
+    "/api/v1/copilot/ask",
+    "/api/v1/copilot/health",
     "/api/v1/correlation/analyze",
     "/api/v1/correlation/zone/{zone_code}",
     "/api/v1/digital-twin/entities/{entity_id}",
@@ -68,6 +70,20 @@ BASELINE_ROUTES = [
     "/openapi.json",
     "/redoc",
 ]
+
+
+def test_copilot_routes_are_registered():
+    """
+    The copilot is registered unconditionally so an operator can
+    always ask a question. It is read-only by construction.
+    """
+
+    from app.main import app as production
+
+    paths = {r.path for r in production.routes}
+
+    assert "/api/v1/copilot/ask" in paths
+    assert "/api/v1/copilot/health" in paths
 
 
 def test_digital_twin_routes_are_registered():

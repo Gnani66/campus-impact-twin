@@ -1,0 +1,64 @@
+import { Suspense } from "react";
+
+import { CopilotScope } from "@/components/copilot/CopilotScope";
+
+/**
+ * The copilot page.
+ *
+ * The scope lives in a Suspense boundary on purpose. This Next
+ * version has cache components enabled, and a page that reads
+ * `searchParams` cannot be prerendered unless the dynamic read is
+ * streamed. Putting the boundary around the part that needs the
+ * URL keeps the page chrome in the static shell, so the heading
+ * and the copilot frame paint immediately and only the scope
+ * waits.
+ */
+export default function CopilotPage({
+  searchParams,
+}: PageProps<"/copilot">) {
+  return (
+    <main className="flex h-screen flex-col bg-slate-100 p-6">
+      <div className="mb-4">
+        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+          Smart Campus
+        </p>
+
+        <h1 className="mt-1 text-2xl font-semibold text-slate-900">
+          AI Operations Copilot
+        </h1>
+
+        <p className="mt-1 max-w-3xl text-sm text-slate-600">
+          Ask what needs attention, why a zone holds its status, or
+          what might be done about it. The backend reads stored
+          sensor readings and decides; the local model only explains
+          what was already decided.
+        </p>
+      </div>
+
+      <div className="min-h-0 flex-1">
+        <Suspense fallback={<CopilotFrame />}>
+          <CopilotScope searchParams={searchParams} />
+        </Suspense>
+      </div>
+    </main>
+  );
+}
+
+/**
+ * The shell the streamed panel replaces.
+ *
+ * Deliberately the same shape as the loaded panel, so arriving at
+ * the copilot does not make the page jump. It says it is loading
+ * rather than showing an empty chat box, because an empty box
+ * reads as "there is nothing to ask" when it actually means "not
+ * ready yet".
+ */
+function CopilotFrame() {
+  return (
+    <section className="flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex-1 flex items-center justify-center p-5 text-sm text-slate-400">
+        Preparing the campus copilot...
+      </div>
+    </section>
+  );
+}

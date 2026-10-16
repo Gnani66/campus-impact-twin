@@ -9,6 +9,12 @@ import type {
   Zone,
 } from "@/lib/types";
 
+import type {
+  CopilotEvidence,
+  CopilotRecommendation,
+  CopilotReply,
+} from "@/lib/copilot";
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ??
   "http://localhost:8000";
@@ -320,3 +326,75 @@ export async function getDigitalTwinEntity(
   // same type the snapshot endpoint produces after conversion.
   return body as unknown as TwinEntity;
 }
+
+// ============================================================
+// AI COPILOT (Phase 13)
+// ============================================================
+//
+// The copilot is the only place in this project where text comes
+// from a language model. Its `answer` field is model prose; its
+// `evidence` and `recommendations` are not. They are computed in
+// Python and returned alongside, so a reader can check every claim
+// the prose makes.
+//
+// That is why `source` is surfaced in the UI: when the local
+// model is unavailable the copilot composes its answer from the
+// same facts and says so. A demo should never appear to have
+// worked when it did not.
+
+async function askCopilot(
+  message: string,
+  entityId?: string | null,
+  signal?: AbortSignal,
+): Promise<CopilotReply> {
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `${API_URL}/api/v1/copilot/ask`,
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          entity_id: entityId ?? null,
+        }),
+        signal,
+      },
+    );
+  } catch {
+    // The raw browser message here is "Failed to fetch", which
+    // tells an operator nothing. The address is named instead,
+    // because in every occurrence of this the cause is that the
+    // backend is not running or is on another port.
+    throw new Error(
+      `The campus API at ${API_URL} could not be reached.`,
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Copilot request failed: ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response.json();
+
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    typeof (body as { answer?: unknown }).answer !==
+      "string"
+  ) {
+    throw new Error(
+      "The copilot returned an unexpected response shape.",
+    );
+  }
+
+  return body as CopilotReply;
+}
+
+export type { CopilotEvidence, CopilotRecommendation };
+
+export { askCopilot };

@@ -151,6 +151,20 @@ export function EntityPanel({ entity }: EntityPanelProps) {
           View Analysis
         </Link>
 
+        {/*
+          Opens the copilot already scoped to this zone. Passing
+          the id rather than the name means the question the
+          operator asks next is answered about this exact entity,
+          and the backend resolves it against its own identifiers
+          rather than trusting a label on the URL.
+        */}
+        <Link
+          href={`/copilot?entity=${encodeURIComponent(entity.id)}`}
+          className="rounded-lg bg-cyan-400/20 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/30"
+        >
+          Ask the copilot
+        </Link>
+
         {entity.pendingApprovals > 0 && (
           <Link
             href="/approvals"
