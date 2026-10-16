@@ -1041,6 +1041,7 @@ class IntelligenceService:
         status: Optional[str] = None,
         severity: Optional[str] = None,
         category: Optional[str] = None,
+        zone_code: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         query = (
@@ -1048,6 +1049,16 @@ class IntelligenceService:
             .table("incidents")
             .select("*")
         )
+
+        campus_id: Optional[str] = None
+
+        if campus_code:
+            campus_id = self._campus_id(campus_code)
+
+            if campus_id is None:
+                return []
+
+            query = query.eq("campus_id", campus_id)
 
         if status:
             query = query.in_(
@@ -1064,15 +1075,19 @@ class IntelligenceService:
                 "category", [category]
             )
 
-        if campus_code:
-            campus = self._campus_id(campus_code)
+        if zone_code:
+            zone_ids = self._zone_ids_for_code(
+                campus_id, zone_code
+            )
 
-            if campus is None:
+            # An unknown zone matches nothing rather than
+            # everything.
+            if not zone_ids:
                 return []
 
-            query = query.eq("campus_id", campus)
+            query = query.in_("zone_id", zone_ids)
 
-        return (
+        rows = (
             query.order(
                 "impact_score", desc=True
             )
@@ -1084,6 +1099,13 @@ class IntelligenceService:
             .data
             or []
         )
+
+        # An id is not a label. Callers render these rows for a
+        # person, so each row is given the zone code it belongs
+        # to.
+        self._zone_codes(rows)
+
+        return rows
 
     def summary(
         self,
@@ -1162,6 +1184,121 @@ class IntelligenceService:
         )
 
         return rows[0]["id"] if rows else None
+
+    def _zone_ids_for_code(
+        self,
+        campus_id: Optional[str],
+        zone_code: str,
+    ) -> List[str]:
+        """
+        Resolves a zone code to ids, scoped to a campus when one
+        is given.
+
+        Zones carry no campus_id of their own: the chain is
+        building to floor to zone. It is walked explicitly rather
+        than through a PostgREST embed so this does not depend on
+        relationship naming in the database.
+
+        An unknown code resolves to an empty list, which the
+        caller turns into "no incidents" rather than "no
+        filtering", so a typo narrows the result instead of
+        quietly widening it.
+        """
+
+        client = get_supabase()
+
+        query = client.table("zones").select("id").eq(
+            "code", zone_code
+        )
+
+        if campus_id is None:
+            # No campus was asked for, so every zone with this
+            # code is in scope.
+            return [
+                item["id"]
+                for item in query.execute().data or []
+            ]
+
+        buildings = (
+            client.table("buildings")
+            .select("id")
+            .eq("campus_id", campus_id)
+            .execute()
+            .data
+            or []
+        )
+
+        if not buildings:
+            return []
+
+        floors = (
+            client.table("floors")
+            .select("id")
+            .in_(
+                "building_id",
+                [item["id"] for item in buildings],
+            )
+            .execute()
+            .data
+            or []
+        )
+
+        if not floors:
+            return []
+
+        zones = (
+            query.in_(
+                "floor_id",
+                [item["id"] for item in floors],
+            )
+            .execute()
+            .data
+            or []
+        )
+
+        return [item["id"] for item in zones]
+
+    @staticmethod
+    def _zone_codes(
+        rows: List[Dict[str, Any]],
+    ) -> None:
+        """
+        Adds `zone_code` to each row, in place.
+
+        An incident stores only a zone id, which is not something
+        a person recognises. The lookup is one query for the whole
+        page rather than one per incident.
+        """
+
+        zone_ids = {
+            row.get("zone_id")
+            for row in rows
+            if row.get("zone_id")
+        }
+
+        if not zone_ids:
+            for row in rows:
+                row.setdefault("zone_code", None)
+
+            return
+
+        zones = (
+            get_supabase()
+            .table("zones")
+            .select("id,code")
+            .in_("id", list(zone_ids))
+            .execute()
+            .data
+            or []
+        )
+
+        codes = {
+            item["id"]: item.get("code")
+            for item in zones
+        }
+
+        for row in rows:
+            row["zone_code"] = codes.get(row.get("zone_id"))
 
 
 # Process-wide instance. The caches on it are process-local and

@@ -105,6 +105,14 @@ def get_incidents(
             "equipment, safety, maintenance or other"
         ),
     ),
+    zone_code: Optional[str] = Query(
+        default=None,
+        alias="zone",
+        description=(
+            "Zone code, for example LH01. Narrows to incidents "
+            "in that zone; an unknown code matches nothing."
+        ),
+    ),
     limit: int = Query(
         default=50,
         ge=1,
@@ -117,6 +125,7 @@ def get_incidents(
             status=status_filter,
             severity=severity,
             category=category,
+            zone_code=zone_code,
             limit=limit,
         )
 

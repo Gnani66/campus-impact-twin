@@ -99,6 +99,7 @@ def test_incident_list_hides_the_exception(monkeypatch):
             status_filter=None,
             severity=None,
             category=None,
+            zone_code=None,
             limit=50,
         )
 
@@ -123,6 +124,7 @@ def test_incident_list_logs_the_traceback(
                 status_filter=None,
                 severity=None,
                 category=None,
+                zone_code=None,
                 limit=50,
             )
 

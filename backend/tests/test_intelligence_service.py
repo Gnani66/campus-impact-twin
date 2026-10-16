@@ -1082,6 +1082,161 @@ class TestQueries:
         assert rows[0]["impact_score"] == 99.0
 
 
+class TestListByZone:
+    """
+    Filtering and labelling by zone.
+
+    An incident stores a zone *id*. Neither the filter a person
+    types nor the label they read should require knowing one, so
+    the code is resolved on read and filtering happens in the
+    query rather than in the browser.
+    """
+
+    def test_rows_carry_the_zone_code(
+        self, service, store
+    ):
+        store["incidents"] = [
+            {"campus_id": CAMPUS_ID, "zone_id": ZONE_ID,
+             "severity": "high", "status": "open",
+             "impact_score": 60.0, "detected_at": iso()},
+        ]
+
+        rows = service.list_incidents()
+
+        assert rows[0]["zone_code"] == "LH01"
+
+    def test_incident_without_a_zone_has_no_code(
+        self, service, store
+    ):
+        store["incidents"] = [
+            {"campus_id": CAMPUS_ID, "zone_id": None,
+             "severity": "low", "status": "open",
+             "impact_score": 10.0, "detected_at": iso()},
+        ]
+
+        rows = service.list_incidents()
+
+        assert rows[0]["zone_code"] is None
+
+    def test_filter_narrows_to_the_named_zone(
+        self, service, store
+    ):
+        store["zones"] = [
+            {"id": ZONE_ID, "code": "LH01",
+             "floor_id": FLOOR_ID},
+            {"id": "zone-2", "code": "LIB01",
+             "floor_id": FLOOR_ID},
+        ]
+
+        store["incidents"] = [
+            {"campus_id": CAMPUS_ID, "zone_id": ZONE_ID,
+             "severity": "high", "status": "open",
+             "impact_score": 60.0, "detected_at": iso()},
+            {"campus_id": CAMPUS_ID, "zone_id": "zone-2",
+             "severity": "low", "status": "open",
+             "impact_score": 10.0, "detected_at": iso()},
+        ]
+
+        rows = service.list_incidents(zone_code="LIB01")
+
+        assert [row["zone_id"] for row in rows] == [
+            "zone-2"
+        ]
+
+    def test_unknown_zone_matches_nothing(
+        self, service, store
+    ):
+        """
+        An unrecognised code must narrow to nothing, not to
+        everything. Widening silently would be the more
+        dangerous of the two mistakes.
+        """
+
+        store["zones"] = [
+            {"id": ZONE_ID, "code": "LH01",
+             "floor_id": FLOOR_ID},
+        ]
+
+        store["incidents"] = [
+            {"campus_id": CAMPUS_ID, "zone_id": ZONE_ID,
+             "severity": "high", "status": "open",
+             "impact_score": 60.0, "detected_at": iso()},
+        ]
+
+        assert service.list_incidents(zone_code="NOPE") == []
+
+    def test_zone_filter_composes_with_the_others(
+        self, service, store
+    ):
+        store["zones"] = [
+            {"id": ZONE_ID, "code": "LH01",
+             "floor_id": FLOOR_ID},
+        ]
+
+        store["incidents"] = [
+            {"campus_id": CAMPUS_ID, "zone_id": ZONE_ID,
+             "severity": "critical", "status": "open",
+             "impact_score": 95.0, "detected_at": iso()},
+            {"campus_id": CAMPUS_ID, "zone_id": ZONE_ID,
+             "severity": "low", "status": "open",
+             "impact_score": 10.0, "detected_at": iso()},
+        ]
+
+        rows = service.list_incidents(
+            zone_code="LH01", severity="critical"
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["severity"] == "critical"
+
+    def test_zone_outside_the_campus_is_not_matched(
+        self, service, store
+    ):
+        """
+        The same code in another campus is a different zone.
+        Scoping to the campus is what stops a filter meant for
+        this campus returning someone else's incident.
+        """
+
+        store["zones"] = [
+            {"id": ZONE_ID, "code": "LH01",
+             "floor_id": FLOOR_ID},
+            {"id": "zone-9", "code": "LH01",
+             "floor_id": "floor-9"},
+        ]
+
+        store["buildings"] = [
+            {"id": BUILDING_ID, "campus_id": CAMPUS_ID},
+            {"id": "building-9",
+             "campus_id": "campus-9"},
+        ]
+
+        store["floors"] = [
+            {"id": FLOOR_ID, "building_id": BUILDING_ID},
+            {"id": "floor-9", "building_id": "building-9"},
+        ]
+
+        store["incidents"] = [
+            {"campus_id": CAMPUS_ID, "zone_id": ZONE_ID,
+             "severity": "high", "status": "open",
+             "impact_score": 60.0, "detected_at": iso()},
+            {"campus_id": "campus-9", "zone_id": "zone-9",
+             "severity": "high", "status": "open",
+             "impact_score": 60.0, "detected_at": iso()},
+        ]
+
+        rows = service.list_incidents(
+            campus_code="CIT-MAIN", zone_code="LH01"
+        )
+
+        # The other campus's identically-coded zone is not
+        # reachable from this campus, so its incident cannot come
+        # back even though the code matches.
+        assert [row["zone_id"] for row in rows] == [
+            ZONE_ID
+        ]
+
+
 class TestOccupancyComparison:
     """
     Phase 7 STEP 14: a camera count and a sensor count for the

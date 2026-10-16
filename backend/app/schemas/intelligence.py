@@ -46,6 +46,11 @@ class IncidentResponse(BaseModel):
     sensor_id: Optional[str] = None
     equipment_id: Optional[str] = None
 
+    # The human-readable code for `zone_id`, resolved on read.
+    # An incident is stored by id, which is not something anyone
+    # recognises in a list of problems.
+    zone_code: Optional[str] = None
+
     detected_at: datetime
     acknowledged_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
