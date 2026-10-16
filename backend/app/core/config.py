@@ -57,11 +57,43 @@ class Settings(BaseSettings):
     # refuses to download anything.
     vision_model_path: str = ""
 
+    # Browser origins allowed to call this API.
+    #
+    # A comma-separated list so a deployment can name the
+    # origins it serves without a code change. The default is
+    # the port `next dev` uses when 3000 is free.
+    #
+    # This is here rather than hardcoded because the frontend
+    # port moves: `next dev` falls back to 3001 when something
+    # already holds 3000, and an origin that is not listed here
+    # produces a response with no Access-Control-Allow-Origin
+    # header, which the browser reports as ERR_FAILED. That
+    # reads as "the API is down" when the API answered 200.
+    cors_allowed_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """
+        The configured origins as a list, ready for the CORS
+        middleware.
+
+        Split here rather than at the call site so the parsing and
+        its edge cases are testable on their own.
+        """
+
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache

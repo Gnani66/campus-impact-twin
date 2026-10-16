@@ -182,18 +182,16 @@ app = FastAPI(
     lifespan=create_lifespan(),
 )
 
-# Both loopback spellings are allowed because they are different
-# origins to a browser, and developers reach the frontend as one
-# or the other without noticing. A fetch from 127.0.0.1 to a
-# backend that allows only localhost is blocked by CORS even
-# though both are the same machine, which produces a "failed to
-# fetch" that looks like the API being down.
+# The allowed origins come from CORS_ALLOWED_ORIGINS. Both
+# loopback spellings are in the default because they are
+# different origins to a browser, and developers reach the
+# frontend as one or the other without noticing. A fetch from
+# 127.0.0.1 to a backend that allows only localhost is blocked
+# by CORS even though both are the same machine, which produces
+# a "failed to fetch" that looks like the API being down.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
