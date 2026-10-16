@@ -188,9 +188,18 @@ class TelemetryRuntime:
             return
 
         if not self.enabled:
-            logger.info(
-                "MQTT_ENABLED=false; telemetry pipeline "
-                "not started"
+            # A warning, not an info line. Nothing is ingested and
+            # nothing is stored while this is off, so every zone
+            # reads as stale and the twin shows offline - which
+            # reads as a broken app rather than a disabled
+            # pipeline, and is easy to miss further up a startup
+            # log.
+            logger.warning(
+                "MQTT_ENABLED=false; telemetry pipeline not "
+                "started. No sensor readings will be ingested "
+                "or stored, so telemetry will go stale. Start "
+                "the backend with MQTT_ENABLED=true to enable "
+                "it."
             )
             self._started = True
             self._stopped = False
