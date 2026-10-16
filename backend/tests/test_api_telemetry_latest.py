@@ -1028,6 +1028,141 @@ def test_campus_twin_route_still_works(monkeypatch, registry):
     assert body["zones"][0]["code"] == "LH01"
 
 
+def _seed_campus(supabase: FakeSupabase) -> None:
+    supabase.tables["campuses"] = [
+        {
+            "id": CAMPUS_ID,
+            "code": "CIT-MAIN",
+            "name": "Cambridge Institute of Technology",
+            "description": None,
+            "timezone": "Asia/Kolkata",
+            "metadata": {},
+            "created_at": T0.isoformat(),
+            "updated_at": T0.isoformat(),
+        }
+    ]
+
+
+def _incident(
+    incident_id: str,
+    status: str,
+    impact_score: float,
+) -> dict:
+    stamp = T0.isoformat()
+
+    return {
+        "id": incident_id,
+        "campus_id": CAMPUS_ID,
+        "building_id": None,
+        "zone_id": None,
+        "sensor_id": None,
+        "equipment_id": None,
+        "category": "environment",
+        "severity": "high",
+        "status": status,
+        "title": f"incident {status}",
+        "description": "Not needed in this test.",
+        "impact_score": impact_score,
+        "confidence_score": 90.0,
+        "detection_method": "deterministic_rule",
+        "evidence": [],
+        "detected_at": stamp,
+        "acknowledged_at": None,
+        "resolved_at": (
+            None if status == "open" else stamp
+        ),
+        "created_at": stamp,
+        "updated_at": stamp,
+    }
+
+
+def test_campus_twin_lists_only_incidents_needing_attention(
+    monkeypatch, registry
+):
+    """
+    The twin snapshot is a picture of the campus as it is now.
+
+    A resolved or dismissed incident appearing in it reads as an
+    ongoing problem, because the dashboard counts and lists
+    whatever it is handed. History is served by
+    `/api/v1/incidents`, not here.
+    """
+
+    supabase = FakeSupabase()
+
+    _seed_campus(supabase)
+
+    supabase.tables["incidents"] = [
+        _incident("open-1", "open", 90.0),
+        _incident("ack-1", "acknowledged", 70.0),
+        _incident("investigating-1", "investigating", 50.0),
+        _incident("resolved-1", "resolved", 60.0),
+        _incident("dismissed-1", "dismissed", 40.0),
+    ]
+
+    client, _fake = make_client(
+        monkeypatch, supabase=supabase, registry=registry
+    )
+
+    response = client.get("/api/v1/campus/CIT-MAIN/twin")
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    # Ordered by impact score, highest first.
+    assert [item["id"] for item in body["incidents"]] == [
+        "open-1",
+        "ack-1",
+        "investigating-1",
+    ]
+
+
+def test_campus_twin_incident_query_is_scoped_to_open_statuses(
+    monkeypatch, registry
+):
+    """
+    The filter has to reach the query, not be applied afterwards.
+
+    A resolved incident with a higher impact score would otherwise
+    be fetched and then dropped, which reads as correct until
+    someone asks why the count is right.
+    """
+
+    supabase = FakeSupabase()
+
+    _seed_campus(supabase)
+    supabase.tables["incidents"] = []
+
+    client, _fake = make_client(
+        monkeypatch, supabase=supabase, registry=registry
+    )
+
+    assert (
+        client.get("/api/v1/campus/CIT-MAIN/twin").status_code
+        == 200
+    )
+
+    incident_queries = [
+        call
+        for call in supabase.calls
+        if isinstance(call, dict)
+        and call.get("table") == "incidents"
+        and call.get("verb") == "execute"
+    ]
+
+    assert incident_queries
+
+    filters = incident_queries[0]["value"]
+
+    assert "status" in filters
+    assert sorted(filters["status"]) == [
+        "acknowledged",
+        "investigating",
+        "open",
+    ]
+
+
 def test_route_list_is_unchanged_apart_from_the_new_route():
     routes = sorted(route.path for route in app.routes)
 

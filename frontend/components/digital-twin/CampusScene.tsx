@@ -49,13 +49,18 @@ export function CampusScene({
 
   return (
     <div className="h-full w-full overflow-hidden rounded-2xl bg-slate-950">
+      {/* "percentage" is PCFShadowMap. The bare `shadows`
+          shorthand resolves to PCFSoftShadowMap, which three 0.186
+          removed from the renderer: it warned and fell back to this
+          same type, so naming it is identical output without the
+          warning. */}
       <Canvas
         camera={{
           position: TWIN_CAMERA.position,
           fov: 45,
         }}
         dpr={[1, 1.5]}
-        shadows
+        shadows="percentage"
         onPointerMissed={handleMiss}
       >
         <TwinLighting />

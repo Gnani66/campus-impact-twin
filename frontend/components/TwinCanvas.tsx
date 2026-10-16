@@ -49,7 +49,12 @@ export default function TwinCanvas({
 }: TwinCanvasProps) {
   return (
     <div className="relative h-full w-full">
-      <Canvas shadows>
+      {/* "percentage" is PCFShadowMap. The bare `shadows` shorthand
+          resolves to PCFSoftShadowMap, which three 0.186 removed
+          from the renderer: it warned and fell back to this same
+          type, so naming it is identical output without the
+          warning. */}
+      <Canvas shadows="percentage">
         <color
           attach="background"
           args={[TWIN_CONFIG.background]}

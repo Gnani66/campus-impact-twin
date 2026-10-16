@@ -28,6 +28,7 @@ from app.schemas.campus import (
     SensorResponse,
     ZoneResponse,
 )
+from app.services.intelligence_service import OPEN_STATUSES
 from app.telemetry.registry import get_registry
 
 
@@ -199,9 +200,18 @@ def get_campus_twin(
             order_column="code",
         )
 
+        # Only incidents that still need attention. A resolved or
+        # dismissed incident is history, and this endpoint is a
+        # snapshot of the campus as it is now - the dashboard
+        # counts and lists whatever it is given, so a closed
+        # incident appearing here reads as an ongoing problem.
+        # `GET /api/v1/incidents` remains the full history.
         incidents = _select_all(
             "incidents",
-            {"campus_id": campus_id},
+            {
+                "campus_id": campus_id,
+                "status": list(OPEN_STATUSES),
+            },
             order_column="impact_score",
             descending=True,
         )

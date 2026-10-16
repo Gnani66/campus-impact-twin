@@ -8,6 +8,7 @@ letting an intelligence failure raise into the telemetry path.
 """
 
 import itertools
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -51,6 +52,30 @@ def _as_epoch(value) -> float:
         parsed = parsed.replace(tzinfo=timezone.utc)
 
     return parsed.timestamp()
+
+
+def _max_depth(value) -> int:
+    """
+    How deeply a value nests.
+
+    Stored evidence is a list holding a record holding a list of
+    observations, so a flat record has a small, fixed depth. What
+    matters is that the number does not change as observations
+    accumulate.
+    """
+
+    if isinstance(value, dict):
+        return 1 + max(
+            [_max_depth(item) for item in value.values()]
+            or [0]
+        )
+
+    if isinstance(value, list):
+        return 1 + max(
+            [_max_depth(item) for item in value] or [0]
+        )
+
+    return 0
 
 
 class FakeResult:
@@ -493,6 +518,114 @@ class TestDeduplication:
         )
 
         assert len(observations) <= 50
+
+    def test_observation_depth_does_not_grow_with_refreshes(
+        self, service, store
+    ):
+        """
+        The bound above was on length, and length was never the
+        problem.
+
+        Evidence used to carry the *whole previous record* inside
+        its own observations list, so every refresh added a level
+        of nesting. Depth reached 200 in the demo data. Past a
+        certain depth the client could no longer parse its own
+        stored row and returned it as a string, which is what
+        broke both the campus twin endpoint and deduplication
+        itself. Asserting the length let all of that through.
+        """
+
+        for _ in range(10):
+            self._breach(service, store)
+
+        early = _max_depth(
+            service.list_incidents()[0]["evidence"]
+        )
+
+        for _ in range(50):
+            self._breach(service, store)
+
+        incident = service.list_incidents()[0]
+
+        assert _max_depth(incident["evidence"]) == early
+
+        # Depth is the cause and the precise invariant; the
+        # payload is the symptom. Flat observations of a handful
+        # of scalars, bounded at fifty, stay small. Under the old
+        # code this reached tens of kilobytes.
+        assert len(json.dumps(incident["evidence"])) < 10_000
+
+    def test_no_observation_contains_another_record(
+        self, service, store
+    ):
+        for _ in range(60):
+            self._breach(service, store)
+
+        observations = service.list_incidents()[0][
+            "evidence"
+        ][0]["observations"]
+
+        for observation in observations:
+            assert "observations" not in observation
+
+    def test_history_keeps_the_first_observation(
+        self, service, store
+    ):
+        self._breach(service, store, 1900.0)
+        self._breach(service, store, 2600.0)
+
+        observations = service.list_incidents()[0][
+            "evidence"
+        ][0]["observations"]
+
+        # The first refresh has no list yet. Carrying the original
+        # observation over is what makes the timeline start at the
+        # event rather than at the second reading.
+        assert len(observations) == 2
+        assert observations[0]["value"] == 1900.0
+
+    def test_refresh_flattens_a_nested_record_from_an_earlier_version(
+        self, service, store
+    ):
+        """
+        Rows already written by the old code still exist, and a
+        refresh of one must not just copy its nesting forward.
+        """
+
+        self._breach(service, store, 1900.0)
+
+        record = store["incidents"][0]["evidence"][0]
+
+        # Rebuild what the old code produced: record after record
+        # nested inside the next one's observations.
+        nested = dict(record)
+
+        for _ in range(20):
+            nested = {**nested, "observations": [nested]}
+
+        store["incidents"][0]["evidence"] = [nested]
+
+        assert _max_depth(store["incidents"][0]["evidence"]) > 20
+
+        self._breach(service, store, 2100.0)
+
+        evidence = store["incidents"][0]["evidence"]
+
+        assert _max_depth(evidence) <= 4
+
+        observations = evidence[0]["observations"]
+
+        assert all(
+            "observations" not in item
+            for item in observations
+        )
+
+        # The newest reading is the record itself, and the
+        # earlier one survived in the flattened history.
+        assert evidence[0]["value"] == 2100.0
+        assert 1900.0 in [
+            item.get("value") for item in observations
+        ]
 
     def test_different_rules_are_separate_incidents(
         self, service, store

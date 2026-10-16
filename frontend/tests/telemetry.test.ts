@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getLatestTelemetry } from "@/lib/api";
+import { API_URL, ApiUnreachableError, getLatestTelemetry } from "@/lib/api";
 import {
   describeFreshness,
   formatMetricLabel,
@@ -331,15 +331,22 @@ describe("getLatestTelemetry", () => {
     ).rejects.toThrow(/503/);
   });
 
-  it("throws when the network fails", async () => {
+  it("throws when the network fails, naming the address", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockRejectedValue(new Error("offline")),
     );
 
-    await expect(
-      getLatestTelemetry("CIT-MAIN"),
-    ).rejects.toThrow(/unreachable/i);
+    // The address matters: every instance of this in the
+    // project's history was the frontend on a different port
+    // from the backend, and a message that does not name the
+    // address costs the reader the search.
+    const error = await getLatestTelemetry("CIT-MAIN").catch(
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(ApiUnreachableError);
+    expect((error as Error).message).toContain(API_URL);
   });
 
   it("rejects a malformed response shape", async () => {

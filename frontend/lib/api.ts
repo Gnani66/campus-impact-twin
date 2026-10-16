@@ -15,9 +15,111 @@ import type {
   CopilotReply,
 } from "@/lib/copilot";
 
-const API_URL =
+/**
+ * The configured backend address.
+ *
+ * Exported so a caller can name it when a request fails. Every
+ * "failed to fetch" in this project's history has been the
+ * frontend pointed at a port the backend was not listening on,
+ * and the browser's own message for that names neither the
+ * address nor the cause.
+ *
+ * 127.0.0.1 rather than localhost, because that is the address
+ * uvicorn binds by default; where localhost resolves to ::1
+ * first, "localhost" is refused by a healthy backend.
+ */
+export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ??
-  "http://localhost:8000";
+  "http://127.0.0.1:8000";
+
+/**
+ * The backend could not be reached at all.
+ *
+ * Distinct from a response the backend refused, because the
+ * remedies are different: this one is nearly always the port or
+ * a backend that is not running, and the message says which
+ * address was tried.
+ */
+export class ApiUnreachableError extends Error {
+  constructor(label: string) {
+    super(
+      `${label} could not reach the campus API at ${API_URL}. ` +
+        "Check that the backend is running on that address.",
+    );
+
+    this.name = "ApiUnreachableError";
+  }
+}
+
+/**
+ * Performs a request, converting the failure modes that
+ * otherwise surface as an unhelpful "Failed to fetch".
+ *
+ * An abort is rethrown untouched: a cancelled poll is not an
+ * error, and the polling hooks rely on recognising it by name.
+ */
+async function apiFetch(
+  url: string,
+  init: RequestInit,
+  label: string,
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (cause) {
+    if (
+      cause instanceof DOMException &&
+      cause.name === "AbortError"
+    ) {
+      throw cause;
+    }
+
+    throw new ApiUnreachableError(label);
+  }
+}
+
+/**
+ * Rejects a response the backend declined to serve.
+ *
+ * `notFoundMessage` lets a caller describe a 404 in terms of the
+ * thing that was missing rather than as a status code.
+ */
+function ensureOk(
+  response: Response,
+  label: string,
+  notFoundMessage?: string,
+): void {
+  if (response.ok) {
+    return;
+  }
+
+  if (response.status === 404 && notFoundMessage) {
+    throw new Error(notFoundMessage);
+  }
+
+  throw new Error(
+    `${label} failed with status ${response.status}.`,
+  );
+}
+
+/**
+ * Parses a JSON body, rejecting a malformed one.
+ *
+ * A backend that is up but serving HTML (a wrong port hitting
+ * another service, for instance) produces a parse failure here
+ * rather than a confusing render failure later.
+ */
+async function readJson(
+  response: Response,
+  label: string,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(
+      `${label} returned a malformed response from ${API_URL}.`,
+    );
+  }
+}
 
 export interface CampusTwinData {
   campus: Campus;
@@ -32,20 +134,20 @@ export interface CampusTwinData {
 export async function getCampusTwin(
   campusCode = "CIT-MAIN",
 ): Promise<CampusTwinData> {
-  const response = await fetch(
+  const label = "Campus Twin API";
+
+  const response = await apiFetch(
     `${API_URL}/api/v1/campus/${campusCode}/twin`,
-    {
-      cache: "no-store",
-    },
+    { cache: "no-store" },
+    label,
   );
 
-  if (!response.ok) {
-    throw new Error(
-      `Campus Twin API failed: ${response.status}`,
-    );
-  }
+  ensureOk(response, label);
 
-  return response.json();
+  return (await readJson(
+    response,
+    label,
+  )) as CampusTwinData;
 }
 
 
@@ -131,43 +233,24 @@ export async function getLatestTelemetry(
     `${API_URL}/api/v1/campus/${campusCode}` +
     `/telemetry/latest${query ? `?${query}` : ""}`;
 
-  let response: Response;
+  const label = "Telemetry API";
 
-  try {
-    response = await fetch(url, {
+  const response = await apiFetch(
+    url,
+    {
       cache: "no-store",
       signal: options.signal,
-    });
-  } catch (cause) {
-    if (
-      cause instanceof DOMException &&
-      cause.name === "AbortError"
-    ) {
-      throw cause;
-    }
+    },
+    label,
+  );
 
-    throw new Error(
-      "Telemetry API is unreachable. Is the backend running?",
-    );
-  }
+  ensureOk(response, label);
 
-  if (!response.ok) {
-    throw new Error(
-      `Telemetry API failed: ${response.status}`,
-    );
-  }
-
-  const body: unknown = await response
-    .json()
-    .catch(() => {
-      throw new Error(
-        "Telemetry API returned a malformed response.",
-      );
-    });
+  const body = await readJson(response, label);
 
   if (!isLatestTelemetryData(body)) {
     throw new Error(
-      "Telemetry API returned an unexpected response shape.",
+      `${label} returned an unexpected response shape.`,
     );
   }
 
@@ -247,31 +330,24 @@ function isTwinSnapshot(
 export async function getDigitalTwinSnapshot(
   signal?: AbortSignal,
 ): Promise<TwinSnapshotWire> {
-  const response = await fetch(
+  const label = "Digital Twin API";
+
+  const response = await apiFetch(
     `${API_URL}/api/v1/digital-twin/snapshot`,
     {
       cache: "no-store",
       signal,
     },
+    label,
   );
 
-  if (!response.ok) {
-    throw new Error(
-      `Digital Twin API failed: ${response.status}`,
-    );
-  }
+  ensureOk(response, label);
 
-  const body: unknown = await response
-    .json()
-    .catch(() => {
-      throw new Error(
-        "Digital Twin API returned a malformed response.",
-      );
-    });
+  const body = await readJson(response, label);
 
   if (!isTwinSnapshot(body)) {
     throw new Error(
-      "Digital Twin API returned an unexpected response shape.",
+      `${label} returned an unexpected response shape.`,
     );
   }
 
@@ -282,7 +358,9 @@ export async function getDigitalTwinEntity(
   entityId: string,
   signal?: AbortSignal,
 ): Promise<TwinEntity> {
-  const response = await fetch(
+  const label = "Digital Twin API";
+
+  const response = await apiFetch(
     `${API_URL}/api/v1/digital-twin/entities/${encodeURIComponent(
       entityId,
     )}`,
@@ -290,27 +368,16 @@ export async function getDigitalTwinEntity(
       cache: "no-store",
       signal,
     },
+    label,
   );
 
-  if (response.status === 404) {
-    throw new Error(
-      `No campus entity matching '${entityId}'.`,
-    );
-  }
+  ensureOk(
+    response,
+    label,
+    `No campus entity matching '${entityId}'.`,
+  );
 
-  if (!response.ok) {
-    throw new Error(
-      `Digital Twin API failed: ${response.status}`,
-    );
-  }
-
-  const body: unknown = await response
-    .json()
-    .catch(() => {
-      throw new Error(
-        "Digital Twin API returned a malformed response.",
-      );
-    });
+  const body = await readJson(response, label);
 
   if (
     !isRecord(body) ||
@@ -318,7 +385,7 @@ export async function getDigitalTwinEntity(
     !isRecord(body.metrics)
   ) {
     throw new Error(
-      "Digital Twin API returned an unexpected entity shape.",
+      `${label} returned an unexpected entity shape.`,
     );
   }
 
@@ -347,39 +414,26 @@ async function askCopilot(
   entityId?: string | null,
   signal?: AbortSignal,
 ): Promise<CopilotReply> {
-  let response: Response;
+  const label = "The copilot";
 
-  try {
-    response = await fetch(
-      `${API_URL}/api/v1/copilot/ask`,
-      {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message,
-          entity_id: entityId ?? null,
-        }),
-        signal,
-      },
-    );
-  } catch {
-    // The raw browser message here is "Failed to fetch", which
-    // tells an operator nothing. The address is named instead,
-    // because in every occurrence of this the cause is that the
-    // backend is not running or is on another port.
-    throw new Error(
-      `The campus API at ${API_URL} could not be reached.`,
-    );
-  }
+  const response = await apiFetch(
+    `${API_URL}/api/v1/copilot/ask`,
+    {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        entity_id: entityId ?? null,
+      }),
+      signal,
+    },
+    label,
+  );
 
-  if (!response.ok) {
-    throw new Error(
-      `Copilot request failed: ${response.status}`,
-    );
-  }
+  ensureOk(response, label);
 
-  const body: unknown = await response.json();
+  const body = await readJson(response, label);
 
   if (
     typeof body !== "object" ||

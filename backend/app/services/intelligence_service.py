@@ -846,6 +846,27 @@ class IntelligenceService:
 
         return parsed.timestamp()
 
+    @staticmethod
+    def _observation(
+        record: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Projects an evidence record down to one observation.
+
+        Applied to stored history as well as to new evidence. A
+        record written before this function existed holds whole
+        evidence objects inside its own `observations` list, so
+        projecting is what flattens those rather than copying
+        them forward.
+        """
+
+        return {
+            "observed_at": record.get("observed_at"),
+            "value": record.get("value"),
+            "metric": record.get("metric"),
+            "impact_score": record.get("impact_score"),
+        }
+
     def _refresh_incident(
         self,
         existing: Dict[str, Any],
@@ -860,23 +881,34 @@ class IntelligenceService:
         tracks the worst value seen rather than the first.
         """
 
-        history = list(existing.get("evidence") or [])
+        # Take the *observations list*, not the whole record. The
+        # record that was stored here previously nested the entire
+        # previous evidence inside its own `observations` entry, so
+        # the jsonb went one level deeper on every refresh with no
+        # bound at all. Past a certain depth the client could no
+        # longer parse its own stored row and returned it as raw
+        # text, which cost both the campus twin endpoint and
+        # de-duplication itself - see app/db/supabase.py for the
+        # read side of that.
+        record = (existing.get("evidence") or [{}])[0]
 
-        history.append(
-            {
-                "observed_at": evidence.get(
-                    "observed_at"
-                ),
-                "value": evidence.get("value"),
-                "metric": evidence.get("metric"),
-                "impact_score": evidence.get(
-                    "impact_score"
-                ),
-            }
-        )
+        history = [
+            self._observation(entry)
+            for entry in record.get("observations") or []
+        ]
 
-        # Keep a bounded history so a long-lived incident cannot
-        # grow without limit.
+        # A first refresh has no list yet, so the observation that
+        # created the incident is carried over rather than dropped.
+        if (
+            not history
+            and record.get("observed_at") is not None
+        ):
+            history.append(self._observation(record))
+
+        history.append(self._observation(evidence))
+
+        # Bounded so a long-lived incident cannot grow without
+        # limit.
         merged = evidence.copy()
         merged["observations"] = history[-50:]
 
