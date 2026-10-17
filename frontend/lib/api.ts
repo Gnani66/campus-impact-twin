@@ -24,13 +24,37 @@ import type {
  * and the browser's own message for that names neither the
  * address nor the cause.
  *
- * 127.0.0.1 rather than localhost, because that is the address
- * uvicorn binds by default; where localhost resolves to ::1
- * first, "localhost" is refused by a healthy backend.
+ * The localhost default applies to development only. In a
+ * production build an unset variable throws here instead of
+ * quietly falling back: 127.0.0.1 in a deployed browser means
+ * the visitor's own machine, so every request fails against a
+ * backend that is up and healthy, with nothing in the console
+ * to explain it. Failing at import time turns that into a
+ * build that stops with this message instead.
  */
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ??
-  "http://127.0.0.1:8000";
+function resolveApiUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+
+  if (configured) {
+    return configured;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "NEXT_PUBLIC_API_URL is not set. It is set for local " +
+        "development in .env.local and for Vercel in " +
+        "vercel.json; a deployment that builds without it will " +
+        "have every request aimed at the visitor's own machine.",
+    );
+  }
+
+  // 127.0.0.1 rather than localhost, because that is the address
+  // uvicorn binds by default; where localhost resolves to ::1
+  // first, "localhost" is refused by a healthy backend.
+  return "http://127.0.0.1:8000";
+}
+
+export const API_URL = resolveApiUrl();
 
 /**
  * The backend could not be reached at all.

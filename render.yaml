@@ -18,6 +18,19 @@ services:
       - key: VISION_ENABLED
         value: "false"
       - key: CORS_ALLOWED_ORIGINS
-        sync: false
+        # Comma-separated browser origins allowed to call this API.
+        #
+        # This was `sync: false`, which left the variable unset on
+        # the deployment. The API then fell back to
+        # http://localhost:3000 and answered every browser request
+        # from the Vercel domain with 200 and no
+        # Access-Control-Allow-Origin header — which the browser
+        # reports as a CORS failure, not as a server fault.
+        #
+        # The local origins are kept alongside the deployed one so
+        # a frontend running `npm run dev` can call this same
+        # backend. Add a preview origin (campus-impact-twin-*.vercel.app)
+        # if you use Vercel preview deployments as reviewers do.
+        value: "https://campus-impact-twin.vercel.app,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
       - key: DEFAULT_CAMPUS_CODE
         value: "CIT-MAIN"
