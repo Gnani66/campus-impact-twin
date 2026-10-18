@@ -45,9 +45,46 @@ import type {
  * localhost resolves to ::1 first, "localhost" is refused by a
  * backend that is running perfectly well.
  */
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ??
+
+/**
+ * The deployed backend, used when the variable gives us nothing
+ * usable.
+ *
+ * Named rather than inlined so the default is greppable and the
+ * address appears in exactly one place.
+ */
+export const DEFAULT_API_URL =
   "https://campus-impact-twin-api.onrender.com";
+
+/**
+ * Resolves the backend address from the raw environment value.
+ *
+ * Taken as an argument rather than read from `process.env` so the
+ * empty-value cases are testable. They are not hypothetical: a
+ * deployment that declares NEXT_PUBLIC_API_URL but leaves it empty
+ * produced a build where this resolved to "", and every request
+ * went out as a relative path like `/api/v1/campus/CIT-MAIN/twin`
+ * to the frontend's own origin. That is what the browser showed —
+ * a 404 from the frontend, naming the frontend, for a call that
+ * should have gone to the backend.
+ *
+ * `??` is not enough on its own. It falls back for null and
+ * undefined but accepts "", so an empty variable passes straight
+ * through as the address. An empty string is the single most
+ * common shape for a variable that is declared but unset, and it
+ * fails in exactly the way the localhost default used to: quietly,
+ * with the wrong host and nothing in the console.
+ *
+ * Whitespace is treated the same as empty, because a value of " "
+ * is a configuration slip rather than an address.
+ */
+export function resolveApiUrl(raw?: string | null): string {
+  const configured = raw?.trim();
+
+  return configured ? configured : DEFAULT_API_URL;
+}
+
+export const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
 
 /**
  * The backend could not be reached at all.

@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   API_URL,
   ApiUnreachableError,
+  DEFAULT_API_URL,
   executeApproval,
   getApprovalRequests,
   getCampusTwin,
@@ -27,6 +28,7 @@ import {
   getIncidents,
   getLatestTelemetry,
   prepareApproval,
+  resolveApiUrl,
   reviewApproval,
 } from "@/lib/api";
 
@@ -476,5 +478,55 @@ describe("approvals", () => {
         reviewer: "operator",
       }),
     ).rejects.toThrow(/status 409/);
+  });
+});
+
+/**
+ * Address resolution.
+ *
+ * These defend against a deployment that went live pointing at
+ * itself. NEXT_PUBLIC_API_URL was declared but empty on the
+ * Vercel project, and `??` accepted the empty string as a valid
+ * address. Every request then went out as a relative path and the
+ * browser reported a 404 from the frontend's own origin for calls
+ * that belonged to the backend — which reads like a missing
+ * endpoint rather than a missing hostname.
+ */
+describe("resolveApiUrl", () => {
+  it("uses a configured address", () => {
+    expect(
+      resolveApiUrl("http://127.0.0.1:8000"),
+    ).toBe("http://127.0.0.1:8000");
+  });
+
+  it("falls back when the variable is unset", () => {
+    expect(resolveApiUrl(undefined)).toBe(DEFAULT_API_URL);
+  });
+
+  it("falls back when the variable is null", () => {
+    expect(resolveApiUrl(null)).toBe(DEFAULT_API_URL);
+  });
+
+  // The case that actually shipped broken.
+  it("falls back when the variable is an empty string", () => {
+    expect(resolveApiUrl("")).toBe(DEFAULT_API_URL);
+  });
+
+  it("falls back when the variable is only whitespace", () => {
+    expect(resolveApiUrl("   ")).toBe(DEFAULT_API_URL);
+  });
+
+  // Trailing whitespace would produce "...onrender.com /api/v1",
+  // which is a malformed URL rather than a missing one.
+  it("trims a configured address", () => {
+    expect(
+      resolveApiUrl("  https://example.test  "),
+    ).toBe("https://example.test");
+  });
+
+  it("never resolves to an empty address", () => {
+    for (const raw of [undefined, null, "", "  ", "\n", "\t"]) {
+      expect(resolveApiUrl(raw)).not.toBe("");
+    }
   });
 });
