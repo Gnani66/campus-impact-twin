@@ -11,7 +11,11 @@ import {
   Suspense,
   useMemo,
 } from "react";
-import { Box3, Vector3 } from "three";
+import {
+  Box3,
+  Object3D,
+  Vector3,
+} from "three";
 
 import type {
   Equipment,
@@ -26,8 +30,9 @@ import {
   type Vec3,
 } from "@/lib/twin/config";
 
-import LectureHall from "./LectureHall";
 import SensorMarker from "./SensorMarker";
+import { ModelBoundary } from "./twin/ModelBoundary";
+import { ModelPlaceholder } from "./twin/ModelPlaceholder";
 
 interface TwinCanvasProps {
   sensors: Sensor[];
@@ -75,12 +80,32 @@ export default function TwinCanvas({
         />
 
         <Suspense fallback={null}>
-          <TwinScene
-            sensors={sensors}
-            equipment={equipment}
-            readings={readings}
-            now={now}
-          />
+          {/*
+            The boundary covers the whole scene, because the model
+            is what the markers are placed against. When it fails
+            to load the fallback runs the same scene against an
+            empty object, which makes computeMarkerLayout fall back
+            to its default extent — so the camera, the marker row
+            and the controls are identical either way, and only
+            the room outline is missing.
+          */}
+          <ModelBoundary
+            fallback={
+              <TwinSceneWithoutModel
+                sensors={sensors}
+                equipment={equipment}
+                readings={readings}
+                now={now}
+              />
+            }
+          >
+            <TwinScene
+              sensors={sensors}
+              equipment={equipment}
+              readings={readings}
+              now={now}
+            />
+          </ModelBoundary>
         </Suspense>
       </Canvas>
 
@@ -96,16 +121,60 @@ export default function TwinCanvas({
  * and the camera.
  */
 
-function TwinScene({
+/**
+ * The scene with the real model.
+ *
+ * Separate from the fallback rather than branching inside one
+ * component: useGLTF has to be called unconditionally, so a
+ * component that could render without loading must not call it at
+ * all. Feeding it an empty path to mean "don't load" would be a
+ * request for nothing.
+ */
+function TwinScene(props: TwinCanvasProps) {
+  const { scene } = useGLTF(TWIN_CONFIG.model.path);
+
+  return <TwinContents {...props} scene={scene} />;
+}
+
+/**
+ * The scene when the model could not be loaded.
+ *
+ * Measures an empty object, which reads as an empty box, which is
+ * the case computeMarkerLayout already substitutes a default
+ * extent for. Everything downstream — camera, marker row,
+ * controls — is therefore the same scene the operator would have
+ * seen with the model present, minus the room.
+ */
+function TwinSceneWithoutModel(props: TwinCanvasProps) {
+  const empty = useMemo(() => new Object3D(), []);
+
+  return (
+    <TwinContents
+      {...props}
+      scene={empty}
+      placeholder
+    />
+  );
+}
+
+/**
+ * The scene, given a model to measure.
+ *
+ * Split out so both paths render identical markers, camera and
+ * controls. Having two scenes would let the fallback drift into
+ * being a different, lesser scene over time.
+ */
+function TwinContents({
+  scene,
+  placeholder = false,
   sensors,
   equipment,
   readings,
   now,
-}: TwinCanvasProps) {
-  const { scene } = useGLTF(
-    TWIN_CONFIG.model.path,
-  );
-
+}: TwinCanvasProps & {
+  scene: Object3D;
+  placeholder?: boolean;
+}) {
   // Placement depends only on the model and the sensors, never
   // on readings, so a telemetry refresh cannot move a marker.
   const layout = useMemo(
@@ -130,7 +199,15 @@ function TwinScene({
         far={framing.far}
       />
 
-      <LectureHall />
+      {placeholder ? (
+        <ModelPlaceholder />
+      ) : (
+        <primitive
+          object={scene}
+          scale={1}
+          position={[0, 0, 0]}
+        />
+      )}
 
       {sensors.map((sensor, index) => (
         <SensorMarker

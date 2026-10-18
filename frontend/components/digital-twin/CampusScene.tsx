@@ -14,6 +14,8 @@ import {
 import { EntityMarker } from "./EntityMarker";
 import { LectureHall } from "./LectureHall";
 import { TwinLighting } from "./TwinLighting";
+import { ModelBoundary } from "@/components/twin/ModelBoundary";
+import { ModelPlaceholder } from "@/components/twin/ModelPlaceholder";
 
 import { TWIN_CAMERA, getPlacement, isVisible } from "@/lib/digital-twin";
 
@@ -110,7 +112,17 @@ export function CampusScene({
         */}
         <Bounds fit margin={1.3}>
           <Suspense fallback={null}>
-            <LectureHall />
+            {/*
+              The boundary wraps only the model. Markers are
+              siblings outside it, placed from the backend
+              snapshot rather than from the GLB, so a model that
+              fails to load costs the operator the room outline and
+              nothing else — the status picture this scene exists to
+              show is unaffected.
+            */}
+            <ModelBoundary fallback={<ModelPlaceholder />}>
+              <LectureHall />
+            </ModelBoundary>
 
             {visible.map((entity) => {
               const placement = getPlacement(entity);

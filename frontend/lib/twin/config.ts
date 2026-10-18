@@ -24,11 +24,35 @@ export interface MarkerStyle {
   color: string;
 }
 
+/**
+ * Where the lecture hall GLB lives.
+ *
+ * Defaults to the copy in public/models. Set
+ * NEXT_PUBLIC_MODEL_URL to serve it from somewhere else instead,
+ * which is how it is hosted in production: the file is 260 MB,
+ * far past what a repository should carry, and public/models is
+ * gitignored for that reason, so a build from the repository has
+ * no model to serve.
+ *
+ * Takes the raw value so the blank case is testable. A variable
+ * that is declared but empty has to be treated as unset rather
+ * than as a path, because an empty path would ask the frontend's
+ * own origin for the model — which is the same silent wrong-host
+ * failure the API address had.
+ */
+export function resolveModelPath(raw?: string | null): string {
+  const configured = raw?.trim();
+
+  return configured
+    ? configured
+    : "/models/lecture-hall.glb";
+}
+
 export const TWIN_CONFIG = {
   campusCode: "CIT-MAIN",
   zoneCode: "LH01",
   model: {
-    path: "/models/lecture-hall.glb",
+    path: resolveModelPath(process.env.NEXT_PUBLIC_MODEL_URL),
     scale: 1,
   },
   camera: {
