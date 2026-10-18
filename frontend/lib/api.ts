@@ -24,37 +24,30 @@ import type {
  * and the browser's own message for that names neither the
  * address nor the cause.
  *
- * The localhost default applies to development only. In a
- * production build an unset variable throws here instead of
- * quietly falling back: 127.0.0.1 in a deployed browser means
- * the visitor's own machine, so every request fails against a
- * backend that is up and healthy, with nothing in the console
- * to explain it. Failing at import time turns that into a
- * build that stops with this message instead.
+ * The default is the deployed backend, not localhost. A localhost
+ * default is wrong in the browser: it names the visitor's own
+ * machine, so a deployment missing this variable failed every
+ * request against a backend that was up and healthy, with
+ * nothing in the console to explain it.
+ *
+ * It is deliberately a plain fallback rather than a build
+ * failure. An earlier version threw here when the variable was
+ * unset during a production build, which turned a missing value
+ * into a red build — and it fired on a Vercel build that
+ * vercel.json had supplied the value for, because a deployment's
+ * build environment is not a place to assume the variable will be
+ * readable. A build that completes against a workable default is
+ * recoverable in a way that a crashed build is not.
+ *
+ * Point at a local backend by setting the variable in .env.local
+ * to http://127.0.0.1:8000. Use that address rather than
+ * "localhost": uvicorn binds 127.0.0.1 by default, and where
+ * localhost resolves to ::1 first, "localhost" is refused by a
+ * backend that is running perfectly well.
  */
-function resolveApiUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_API_URL;
-
-  if (configured) {
-    return configured;
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "NEXT_PUBLIC_API_URL is not set. It is set for local " +
-        "development in .env.local and for Vercel in " +
-        "vercel.json; a deployment that builds without it will " +
-        "have every request aimed at the visitor's own machine.",
-    );
-  }
-
-  // 127.0.0.1 rather than localhost, because that is the address
-  // uvicorn binds by default; where localhost resolves to ::1
-  // first, "localhost" is refused by a healthy backend.
-  return "http://127.0.0.1:8000";
-}
-
-export const API_URL = resolveApiUrl();
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ??
+  "https://campus-impact-twin-api.onrender.com";
 
 /**
  * The backend could not be reached at all.
